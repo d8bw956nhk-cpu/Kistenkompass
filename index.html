@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Lager">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#c2410c">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Lager-Organizer</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#1d1d1b;--mute:#6b6a64;--line:#e3e1d9;--acc:#c2410c;--acc2:#fff3ea;--ok:#15803d;--bad:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--bg:#161614;--card:#211f1d;--ink:#f1efe8;--mute:#a09d92;--line:#35332e;--acc:#fb923c;--acc2:#2c2118;--ok:#4ade80;--bad:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) 80px env(safe-area-inset-left)}
+header{padding:18px 16px 8px;max-width:760px;margin:auto}
+h1{font-size:22px;margin:0}
+.sub{color:var(--mute);font-size:14px}
+main{max-width:760px;margin:auto;padding:0 12px}
+.tabs{display:flex;gap:6px;position:sticky;top:0;background:var(--bg);padding:8px 12px;z-index:5;max-width:760px;margin:auto}
+.tabs button{flex:1;padding:10px 4px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font:inherit;font-size:14px;cursor:pointer}
+.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+.card h2,.card h3{margin:0 0 8px;font-size:17px}
+form.add{display:grid;gap:8px}
+label{font-size:13px;color:var(--mute);display:block;margin-bottom:2px}
+input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;min-width:0}
+.row{display:grid;grid-template-columns:90px 1fr;gap:8px}
+button.pri{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:12px;font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:none;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;cursor:pointer}
+button.ghost.danger{color:var(--bad)}
+.chip{display:inline-block;background:var(--acc2);color:var(--acc);border-radius:99px;padding:2px 10px;font-size:12px;margin:2px 4px 2px 0;font-weight:600}
+.item{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line)}
+.item:first-of-type{border-top:0}
+.item .n{flex:1;min-width:0}
+.item .n small{display:block;color:var(--mute);font-size:12px}
+.qty{display:flex;align-items:center;gap:6px}
+.qty button{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:18px;line-height:1;cursor:pointer}
+.qty b{min-width:26px;text-align:center}
+.boxhead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.mute{color:var(--mute);font-size:13px}
+.empty{color:var(--mute);text-align:center;padding:24px 8px}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:99px;font-size:14px;z-index:10;max-width:90vw}
+.actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.hit{background:var(--acc2)}
+</style>
+</head>
+<body>
+<header>
+  <h1>📦 Lager-Organizer</h1>
+  <div class="sub" id="stats"></div>
+</header>
+<nav class="tabs" id="tabs"></nav>
+<main id="app"></main>
+<div class="toast" id="toast" hidden></div>
+
+<script id="data" type="application/json">{"boxes":[],"items":[],"updated":0}</script>
+<script>
+(function(){
+"use strict";
+
+/* ---------- Zustand ---------- */
+var LS="lager-organizer-v1";
+var state=load();
+var tab=(location.hash||"#add").slice(1);
+if(["add","kisten","kategorien","suche","daten"].indexOf(tab)<0) tab="add";
+var query="";
+var confirmId=null;
+
+function load(){
+  var emb={boxes:[],items:[],updated:0};
+  try{emb=JSON.parse(document.getElementById("data").textContent);}catch(e){}
+  try{
+    var l=JSON.parse(localStorage.getItem(LS)||"null");
+    if(l && l.updated>(emb.updated||0)) return l;
+  }catch(e){}
+  return emb;
+}
+function uid(){return Math.random().toString(36).slice(2,9);}
+
+/* ---------- Speichern ---------- */
+var pubTimer=null, artifactNS=null, dirty=false;
+claude_init();
+function claude_init(){
+  try{
+    if(window.claude && window.claude.use){
+      window.claude.use("artifact").then(function(a){artifactNS=a||null;},function(){});
+      window.claude.use("sample").then(function(s){sampleNS=s||null;},function(){});
+    }
+  }catch(e){}
+}
+var sampleNS=null;
+function save(){
+  state.updated=Date.now();
+  try{localStorage.setItem(LS,JSON.stringify(state));}catch(e){}
+  dirty=true;
+  schedulePublish();
+}
+function schedulePublish(){
+  if(!artifactNS) return;
+  clearTimeout(pubTimer);
+  pubTimer=setTimeout(doPublish,3000);
+}
+function doPublish(){
+  if(!artifactNS||!dirty) return;
+  var ae=document.activeElement;
+  if(ae && (ae.tagName==="INPUT"||ae.tagName==="SELECT")){schedulePublish();return;}
+  dirty=false;
+  var clone=document.documentElement.cloneNode(true);
+  clone.querySelector("#app").innerHTML="";
+  clone.querySelector("#tabs").innerHTML="";
+  clone.querySelector("#stats").textContent="";
+  var t=clone.querySelector("#toast"); t.hidden=true; t.textContent="";
+  clone.querySelector("#data").textContent=JSON.stringify(state).replace(/</g,"\\u003c");
+  var html="<!DOCTYPE html>\n"+clone.outerHTML;
+  artifactNS.publish(html).then(function(){},function(e){});
+}
+
+/* ---------- Kategorien automatisch ---------- */
+var RULES=[
+ ["Werkzeug",["hammer","schraub","bohr","säge","zange","werkzeug","schlüssel","wasserwaage","akku","nägel","dübel","schrauben","feile","meißel","zollstock"]],
+ ["Kabel & Zubehör",["kabel","ladegerät","netzteil","adapter","stecker","verlängerung","steckdose","usb","hdmi","batterie"]],
+ ["Elektronik",["laptop","computer","monitor","tastatur","maus","handy","tablet","kamera","lautsprecher","radio","router","drucker","fernseher","konsole","kopfhörer","lampe","glühbirne","led"]],
+ ["Kleidung",["hose","shirt","t-shirt","pullover","jacke","mantel","schuh","socke","kleid","mütze","schal","handschuh","hemd","jeans","stiefel","unterwäsche"]],
+ ["Bettwäsche & Textilien",["bettwäsche","decke","kissen","handtuch","vorhang","laken","teppich","stoff","matratze"]],
+ ["Küche & Haushalt",["teller","tasse","glas","topf","pfanne","besteck","messer","gabel","löffel","schüssel","kaffee","mixer","toaster","backform","vase","kerze","putz","reiniger","schwamm","eimer"]],
+ ["Bücher & Papier",["buch","bücher","ordner","zeitschrift","heft","akte","dokument","unterlagen","papier","album","foto","comic","roman"]],
+ ["Büro",["stift","kugelschreiber","tacker","locher","büro","umschlag","klebeband","schere","notizbuch","etikett"]],
+ ["Medien",["cd","dvd","blu-ray","schallplatte","vinyl","kassette","spiel","videospiel"]],
+ ["Spielzeug",["spielzeug","lego","puppe","teddy","puzzle","brettspiel","kuscheltier","auto","playmobil","bauklötze"]],
+ ["Sport & Freizeit",["ball","fahrrad","helm","ski","hantel","yoga","schläger","rucksack","skateboard","inliner","schlittschuh","angel"]],
+ ["Camping & Outdoor",["zelt","schlafsack","campingkocher","isomatte","laterne","wanderstock","grill"]],
+ ["Garten",["gartenschlauch","blumentopf","erde","dünger","samen","gieß","rasen","harke","spaten","schaufel","pflanze","blumen"]],
+ ["Deko & Saison",["weihnacht","deko","christbaum","lichterkette","kugel","ostern","halloween","bilderrahmen","rahmen"]],
+ ["Bad & Hygiene",["shampoo","seife","zahn","rasier","handtuch","duschgel","creme","bad","föhn"]],
+ ["Farben & Renovierung",["farbe","pinsel","rolle","tapete","kleber","lack","spachtel","abdeck","silikon"]],
+ ["Auto & Fahrrad",["reifen","öl","scheibenwischer","fahrradpumpe","kettenöl","felge","kfz"]],
+ ["Lebensmittel",["konserve","nudeln","reis","mehl","zucker","vorrat","dose","getränk","wasser"]]
+];
+function guessCategory(name){
+  var n=name.toLowerCase();
+  for(var i=0;i<RULES.length;i++){
+    var kws=RULES[i][1];
+    for(var j=0;j<kws.length;j++){ if(n.indexOf(kws[j])>=0) return RULES[i][0]; }
+  }
+  return null;
+}
+function allCategories(){
+  var s={};
+  state.items.forEach(function(i){s[i.cat]=1;});
+  RULES.forEach(function(r){s[r[0]]=1;});
+  s["Sonstiges"]=1;
+  return Object.keys(s).sort(function(a,b){return a.localeCompare(b,"de");});
+}
+function aiCategory(name){
+  if(!sampleNS) return Promise.resolve(null);
+  var cats=allCategories().join(", ");
+  var p="Ordne den Lagergegenstand \""+name+"\" einer Kategorie zu. Bestehende Kategorien: "+cats+". "+
+        "Nimm eine bestehende, wenn sie passt, sonst erfinde eine kurze neue deutsche Kategorie (1-2 Wörter). "+
+        "Antworte nur als JSON: {\"kategorie\":\"...\"}";
+  try{
+    return sampleNS.json(p,{modelTier:"quick"}).then(function(r){
+      var c=r && r.kategorie;
+      return (typeof c==="string" && c.length<40)?c.trim():null;
+    },function(){return null;});
+  }catch(e){return Promise.resolve(null);}
+}
+
+/* ---------- Hilfen ---------- */
+function h(tag,attrs,kids){
+  var e=document.createElement(tag);
+  if(attrs) for(var k in attrs){
+    if(k==="class") e.className=attrs[k];
+    else if(k.slice(0,2)==="on") e.addEventListener(k.slice(2),attrs[k]);
+    else if(attrs[k]===true) e.setAttribute(k,"");
+    else if(attrs[k]!==false && attrs[k]!=null) e.setAttribute(k,attrs[k]);
+  }
+  (kids||[]).forEach(function(c){
+    if(c==null) return;
+    e.appendChild(typeof c==="string"||typeof c==="number"?document.createTextNode(String(c)):c);
+  });
+  return e;
+}
+function toast(msg){
+  var t=document.getElementById("toast");
+  t.textContent=msg; t.hidden=false;
+  clearTimeout(toast._t); toast._t=setTimeout(function(){t.hidden=true;},2200);
+}
+function boxById(id){return state.boxes.filter(function(b){return b.id===id;})[0];}
+function boxItems(id){return state.items.filter(function(i){return i.box===id;});}
+function norm(s){return s.trim().toLowerCase();}
+function sortDe(a,b){return a.localeCompare(b,"de");}
+function boxCats(id){
+  var m={};
+  boxItems(id).forEach(function(i){m[i.cat]=(m[i.cat]||0)+i.qty;});
+  return Object.keys(m).sort(function(a,b){return m[b]-m[a];});
+}
+
+/* ---------- Aktionen ---------- */
+function ensureBox(name,place){
+  var ex=state.boxes.filter(function(b){return norm(b.name)===norm(name);})[0];
+  if(ex) return ex;
+  var b={id:uid(),name:name.trim(),place:(place||"").trim()};
+  state.boxes.push(b);
+  return b;
+}
+function addItem(name,qty,boxName,cat){
+  name=name.trim(); boxName=boxName.trim();
+  if(!name||!boxName) return null;
+  qty=Math.max(1,parseInt(qty,10)||1);
+  var box=ensureBox(boxName);
+  var ex=state.items.filter(function(i){return i.box===box.id && norm(i.name)===norm(name);})[0];
+  if(ex){ex.qty+=qty; return ex;}
+  var it={id:uid(),name:name,qty:qty,box:box.id,cat:cat||"Sonstiges"};
+  state.items.push(it);
+  return it;
+}
+function changeQty(id,d){
+  var it=state.items.filter(function(i){return i.id===id;})[0];
+  if(!it) return;
+  it.qty+=d;
+  if(it.qty<=0) state.items=state.items.filter(function(i){return i.id!==id;});
+  save(); render();
+}
+function removeItem(id){
+  state.items=state.items.filter(function(i){return i.id!==id;});
+  save(); render();
+}
+function removeBox(id){
+  state.boxes=state.boxes.filter(function(b){return b.id!==id;});
+  state.items=state.items.filter(function(i){return i.box!==id;});
+  confirmId=null; save(); render();
+}
+function renameBox(b){
+  var v=window.prompt?null:null; /* prompt ist im Frame gesperrt – inline Bearbeitung */
+}
+
+/* ---------- Ansichten ---------- */
+function viewAdd(){
+  var wrap=h("div");
+  var nameIn=h("input",{id:"f-name",placeholder:"z. B. Akkuschrauber",autocomplete:"off",required:true});
+  var qtyIn=h("input",{id:"f-qty",type:"number",min:"1",value:"1",inputmode:"numeric"});
+  var boxIn=h("input",{id:"f-box",placeholder:"z. B. Kiste 1 (neue wird automatisch angelegt)",list:"boxlist",autocomplete:"off",required:true});
+  var dl=h("datalist",{id:"boxlist"},state.boxes.slice().sort(function(a,b){return sortDe(a.name,b.name);}).map(function(b){return h("option",{value:b.name});}));
+  var catIn=h("select",{id:"f-cat"},[h("option",{value:""},["Automatisch erkennen"])].concat(allCategories().map(function(c){return h("option",{value:c},[c]);})));
+  var btn=h("button",{class:"pri",type:"submit"},["Einlagern"]);
+  var form=h("form",{class:"add"},[
+    h("div",null,[h("label",null,["Objekt"]),nameIn]),
+    h("div",{class:"row"},[h("div",null,[h("label",null,["Anzahl"]),qtyIn]),h("div",null,[h("label",null,["In welcher Kiste?"]),boxIn,dl])]),
+    h("div",null,[h("label",null,["Kategorie"]),catIn]),
+    btn
+  ]);
+  form.addEventListener("submit",function(ev){
+    ev.preventDefault();
+    var name=nameIn.value, qty=qtyIn.value, boxName=boxIn.value, cat=catIn.value;
+    if(!name.trim()||!boxName.trim()) return;
+    function finish(c){
+      var it=addItem(name,qty,boxName,c);
+      save();
+      toast("✓ "+it.qty+"× "+it.name+" → "+boxName.trim()+" ("+it.cat+")");
+      nameIn.value=""; qtyIn.value="1"; catIn.value="";
+      render(); setTimeout(function(){var n=document.getElementById("f-name"); if(n){n.focus();} var b=document.getElementById("f-box"); if(b) b.value=boxName.trim();},0);
+    }
+    if(cat) return finish(cat);
+    var g=guessCategory(name);
+    if(g) return finish(g);
+    /* bereits bekannter Gegenstand gleicher Name? */
+    var known=state.items.filter(function(i){return norm(i.name)===norm(name);})[0];
+    if(known) return finish(known.cat);
+    btn.disabled=true; btn.textContent="Kategorie wird ermittelt …";
+    aiCategory(name).then(function(c){finish(c||"Sonstiges");});
+  });
+  wrap.appendChild(h("div",{class:"card"},[h("h2",null,["Gegenstand einlagern"]),form]));
+
+  var recent=state.items.slice(-5).reverse();
+  if(recent.length){
+    wrap.appendChild(h("div",{class:"card"},[h("h3",null,["Zuletzt hinzugefügt"])].concat(recent.map(function(i){
+      var b=boxById(i.box);
+      return h("div",{class:"item"},[h("div",{class:"n"},[i.qty+"× "+i.name,h("small",null,[(b?b.name:"?")+" · "+i.cat])])]);
+    }))));
+  }
+  return wrap;
+}
+
+function itemRow(i,showBox){
+  var b=boxById(i.box);
+  var isConf=confirmId===i.id;
+  return h("div",{class:"item"},[
+    h("div",{class:"n"},[i.name,h("small",null,[showBox?((b?b.name:"?")+" · "+i.cat):i.cat])]),
+    h("div",{class:"qty"},[
+      h("button",{"aria-label":"weniger",onclick:function(){changeQty(i.id,-1);}},["−"]),
+      h("b",null,[i.qty]),
+      h("button",{"aria-label":"mehr",onclick:function(){changeQty(i.id,1);}},["+"])
+    ]),
+    h("button",{class:"ghost danger",onclick:function(){
+      if(isConf){removeItem(i.id);} else {confirmId=i.id; render();}
+    }},[isConf?"Sicher?":"✕"])
+  ]);
+}
+
+function viewBoxes(){
+  var wrap=h("div");
+  if(!state.boxes.length){wrap.appendChild(h("div",{class:"empty"},["Noch keine Kisten. Lagere zuerst einen Gegenstand ein."]));return wrap;}
+  wrap.appendChild(h("div",{class:"actions",style:"margin:10px 0"},[h("button",{class:"pri",onclick:exportExcel},["📊 Alles nach Excel exportieren"])]));
+  state.boxes.slice().sort(function(a,b){return sortDe(a.name,b.name);}).forEach(function(b){
+    var its=boxItems(b.id).sort(function(x,y){return sortDe(x.name,y.name);});
+    var total=its.reduce(function(s,i){return s+i.qty;},0);
+    var isConf=confirmId===b.id;
+    var placeIn=h("input",{value:b.place||"",placeholder:"Standort (z. B. Keller, Regal 2)",style:"margin-top:8px",
+      onchange:function(e){b.place=e.target.value.trim();save();}});
+    var card=h("div",{class:"card"},[
+      h("div",{class:"boxhead"},[
+        h("div",null,[h("h3",null,["📦 "+b.name]),h("div",{class:"mute"},[its.length+" Artikel · "+total+" Stück"])]),
+        h("button",{class:"ghost danger",onclick:function(){if(isConf){removeBox(b.id);}else{confirmId=b.id;render();}}},[isConf?"Kiste + Inhalt löschen?":"Löschen"])
+      ]),
+      h("div",null,boxCats(b.id).map(function(c){return h("span",{class:"chip"},[c]);})),
+      placeIn
+    ].concat(its.length?its.map(function(i){return itemRow(i,false);}):[h("div",{class:"mute",style:"padding:10px 0"},["Leer"])]));
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
+function viewCats(){
+  var wrap=h("div");
+  var map={};
+  state.items.forEach(function(i){(map[i.cat]=map[i.cat]||[]).push(i);});
+  var cats=Object.keys(map).sort(sortDe);
+  if(!cats.length){wrap.appendChild(h("div",{class:"empty"},["Noch keine Kategorien. Sie entstehen automatisch beim Einlagern."]));return wrap;}
+  cats.forEach(function(c){
+    var its=map[c].sort(function(a,b){return sortDe(a.name,b.name);});
+    var total=its.reduce(function(s,i){return s+i.qty;},0);
+    var boxes={};its.forEach(function(i){var b=boxById(i.box);if(b)boxes[b.name]=1;});
+    wrap.appendChild(h("div",{class:"card"},[
+      h("h3",null,[c]),
+      h("div",{class:"mute"},[its.length+" Artikel · "+total+" Stück · in "+Object.keys(boxes).sort(sortDe).join(", ")])
+    ].concat(its.map(function(i){
+      var b=boxById(i.box);
+      return h("div",{class:"item"},[h("div",{class:"n"},[i.qty+"× "+i.name,h("small",null,["📦 "+(b?b.name:"?")])])]);
+    }))));
+  });
+  return wrap;
+}
+
+function viewSearch(){
+  var wrap=h("div");
+  var inp=h("input",{type:"search",placeholder:"Wo liegt …? (Objekt, Kiste oder Kategorie)",value:query,id:"f-q",
+    oninput:function(e){query=e.target.value;renderResults();}});
+  wrap.appendChild(h("div",{class:"card"},[inp]));
+  var res=h("div",{id:"results"});
+  wrap.appendChild(res);
+  setTimeout(renderResults,0);
+  return wrap;
+}
+function renderResults(){
+  var res=document.getElementById("results"); if(!res) return;
+  res.innerHTML="";
+  var q=norm(query);
+  if(!q){res.appendChild(h("div",{class:"empty"},["Tippe, um Gegenstände zu finden."]));return;}
+  var hits=state.items.filter(function(i){
+    var b=boxById(i.box);
+    return norm(i.name).indexOf(q)>=0||norm(i.cat).indexOf(q)>=0||(b&&norm(b.name).indexOf(q)>=0);
+  }).sort(function(a,b){return sortDe(a.name,b.name);});
+  if(!hits.length){res.appendChild(h("div",{class:"empty"},["Nichts gefunden."]));return;}
+  var card=h("div",{class:"card"});
+  hits.forEach(function(i){
+    var b=boxById(i.box);
+    card.appendChild(h("div",{class:"item"},[
+      h("div",{class:"n"},[i.qty+"× "+i.name,h("small",null,["📦 "+(b?b.name:"?")+(b&&b.place?" ("+b.place+")":"")+" · "+i.cat])])
+    ]));
+  });
+  res.appendChild(card);
+}
+
+/* ---------- Rendern ---------- */
+/*XLSX-START*/
+function xlsxBuild(st){
+  var cmp=function(a,b){return String(a).localeCompare(String(b),"de");};
+  var bx={}; st.boxes.forEach(function(b){bx[b.id]=b;});
+  var items=st.items.map(function(i){
+    var b=bx[i.box]||{name:"?",place:""};
+    return {box:b.name,place:b.place||"",cat:i.cat,name:i.name,qty:i.qty};
+  });
+  function uniq(a){var s={};a.forEach(function(x){s[x]=1;});return Object.keys(s).sort(cmp);}
+
+  /* Blatt 1: alle Artikel */
+  var all=items.slice().sort(function(a,b){return cmp(a.box,b.box)||cmp(a.name,b.name);});
+  var s1=[[H("Kiste"),H("Standort"),H("Kategorie"),H("Objekt"),H("Anzahl")]];
+  all.forEach(function(r){s1.push([r.box,r.place,r.cat,r.name,r.qty]);});
+  var sum=all.reduce(function(s,r){return s+r.qty;},0);
+  var s1total=all.length?[B("Summe"),"","","",{f:"SUM(E2:E"+(all.length+1)+")",v:sum,s:2}]:null;
+  if(s1total) s1.push(s1total);
+
+  /* Blatt 2: nach Kategorie (Objekt aggregiert über Kisten) */
+  var agg={};
+  items.forEach(function(r){
+    var k=r.cat+"\u0000"+r.name.toLowerCase();
+    var a=agg[k]||(agg[k]={cat:r.cat,name:r.name,qty:0,boxes:{}});
+    a.qty+=r.qty; a.boxes[r.box]=(a.boxes[r.box]||0)+r.qty;
+  });
+  var rows2=Object.keys(agg).map(function(k){return agg[k];}).sort(function(a,b){return cmp(a.cat,b.cat)||cmp(a.name,b.name);});
+  var s2=[[H("Kategorie"),H("Objekt"),H("Anzahl gesamt"),H("Liegt in (Kiste: Anzahl)")]];
+  rows2.forEach(function(a){
+    s2.push([a.cat,a.name,a.qty,Object.keys(a.boxes).sort(cmp).map(function(n){return n+": "+a.boxes[n];}).join(", ")]);
+  });
+
+  /* Blatt 3: Kategorien-Übersicht */
+  var cats=uniq(items.map(function(r){return r.cat;}));
+  var s3=[[H("Kategorie"),H("Artikel"),H("Stück"),H("Kisten")]];
+  cats.forEach(function(c){
+    var its=items.filter(function(r){return r.cat===c;});
+    s3.push([c,its.length,its.reduce(function(s,r){return s+r.qty;},0),uniq(its.map(function(r){return r.box;})).join(", ")]);
+  });
+
+  /* Blatt 4: Kisten-Übersicht */
+  var s4=[[H("Kiste"),H("Standort"),H("Artikel"),H("Stück"),H("Kategorien")]];
+  st.boxes.slice().sort(function(a,b){return cmp(a.name,b.name);}).forEach(function(b){
+    var its=items.filter(function(r){return r.box===b.name;});
+    s4.push([b.name,b.place||"",its.length,its.reduce(function(s,r){return s+r.qty;},0),uniq(its.map(function(r){return r.cat;})).join(", ")]);
+  });
+
+  var sheets=[
+    {name:"Alle Artikel",rows:s1,widths:[18,18,22,32,10],filterRows:all.length+1},
+    {name:"Nach Kategorie",rows:s2,widths:[22,32,14,50],filterRows:s2.length},
+    {name:"Kategorien",rows:s3,widths:[24,10,10,50],filterRows:s3.length},
+    {name:"Kisten",rows:s4,widths:[18,18,10,10,50],filterRows:s4.length}
+  ];
+  return xlsxZip(sheets);
+}
+function H(t){return {t:t,s:1};}
+function B(t){return {t:t,s:2};}
+function xmlEsc(s){
+  return String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function colName(i){var s="";i++;while(i>0){var m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=Math.floor((i-1)/26);}return s;}
+function cellXml(v,ref){
+  if(v===""||v==null) return "";
+  var s="";
+  if(typeof v==="object"){
+    if(v.f!==undefined) return '<c r="'+ref+'" s="'+(v.s||0)+'"><f>'+xmlEsc(v.f)+'</f><v>'+v.v+'</v></c>';
+    s=' s="'+(v.s||0)+'"'; v=v.t;
+  }
+  if(typeof v==="number") return '<c r="'+ref+'"'+s+'><v>'+v+'</v></c>';
+  return '<c r="'+ref+'"'+s+' t="inlineStr"><is><t xml:space="preserve">'+xmlEsc(v)+'</t></is></c>';
+}
+function sheetXml(sh){
+  var ncol=sh.widths.length;
+  var x='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+   '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+
+   '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'+
+   '<sheetFormatPr defaultRowHeight="15"/><cols>';
+  sh.widths.forEach(function(w,i){x+='<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+w+'" customWidth="1"/>';});
+  x+='</cols><sheetData>';
+  sh.rows.forEach(function(r,ri){
+    x+='<row r="'+(ri+1)+'">';
+    r.forEach(function(v,ci){x+=cellXml(v,colName(ci)+(ri+1));});
+    x+='</row>';
+  });
+  x+='</sheetData><autoFilter ref="A1:'+colName(ncol-1)+Math.max(1,sh.filterRows)+'"/></worksheet>';
+  return x;
+}
+var CRC_T=null;
+function crc32(b){
+  if(!CRC_T){CRC_T=[];for(var n=0;n<256;n++){var c=n;for(var k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;CRC_T[n]=c>>>0;}}
+  var c=0xFFFFFFFF;for(var i=0;i<b.length;i++)c=CRC_T[(c^b[i])&255]^(c>>>8);
+  return (c^0xFFFFFFFF)>>>0;
+}
+function xlsxZip(sheets){
+  var enc=new TextEncoder();
+  var files=[];
+  function add(n,t){files.push({n:n,d:enc.encode(t)});}
+  var ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>';
+  sheets.forEach(function(s,i){ct+='<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';});
+  ct+='</Types>';
+  add("[Content_Types].xml",ct);
+  add("_rels/.rels",'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+  var wb='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>';
+  var rels='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">';
+  sheets.forEach(function(s,i){
+    wb+='<sheet name="'+xmlEsc(s.name)+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>';
+    rels+='<Relationship Id="rId'+(i+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>';
+    add("xl/worksheets/sheet"+(i+1)+".xml",sheetXml(s));
+  });
+  wb+='</sheets></workbook>';
+  rels+='<Relationship Id="rId'+(sheets.length+1)+'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>';
+  add("xl/workbook.xml",wb);
+  add("xl/_rels/workbook.xml.rels",rels);
+  add("xl/styles.xml",'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFCE4D6"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>');
+
+  var chunks=[],central=[],off=0;
+  files.forEach(function(f){
+    var nm=enc.encode(f.n),crc=crc32(f.d);
+    var lh=new DataView(new ArrayBuffer(30));
+    lh.setUint32(0,0x04034b50,true);lh.setUint16(4,20,true);lh.setUint16(6,0x0800,true);lh.setUint16(8,0,true);
+    lh.setUint16(10,0,true);lh.setUint16(12,0x21,true);lh.setUint32(14,crc,true);lh.setUint32(18,f.d.length,true);
+    lh.setUint32(22,f.d.length,true);lh.setUint16(26,nm.length,true);lh.setUint16(28,0,true);
+    chunks.push(new Uint8Array(lh.buffer),nm,f.d);
+    var ch=new DataView(new ArrayBuffer(46));
+    ch.setUint32(0,0x02014b50,true);ch.setUint16(4,20,true);ch.setUint16(6,20,true);ch.setUint16(8,0x0800,true);
+    ch.setUint16(10,0,true);ch.setUint16(12,0,true);ch.setUint16(14,0x21,true);ch.setUint32(16,crc,true);
+    ch.setUint32(20,f.d.length,true);ch.setUint32(24,f.d.length,true);ch.setUint16(28,nm.length,true);
+    ch.setUint32(42,off,true);
+    central.push(new Uint8Array(ch.buffer),nm);
+    off+=30+nm.length+f.d.length;
+  });
+  var csize=0;central.forEach(function(c){csize+=c.length;});
+  var end=new DataView(new ArrayBuffer(22));
+  end.setUint32(0,0x06054b50,true);end.setUint16(8,files.length,true);end.setUint16(10,files.length,true);
+  end.setUint32(12,csize,true);end.setUint32(16,off,true);
+  var parts=chunks.concat(central,[new Uint8Array(end.buffer)]);
+  var total=0;parts.forEach(function(p){total+=p.length;});
+  var out=new Uint8Array(total),pos=0;
+  parts.forEach(function(p){out.set(p,pos);pos+=p.length;});
+  return out;
+}
+function exportExcel(){
+  if(!state.items.length){toast("Noch nichts zum Exportieren");return;}
+  try{
+    var bytes=xlsxBuild(state);
+    var b=new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    var a=document.createElement("a");a.href=URL.createObjectURL(b);
+    a.download="lager-"+new Date().toISOString().slice(0,10)+".xlsx";
+    document.body.appendChild(a);a.click();a.remove();
+    toast("Excel-Datei erstellt");
+  }catch(e){toast("Export fehlgeschlagen");}
+}
+/*XLSX-END*/
+
+function viewData(){
+  var msg=h("div",{class:"mute",style:"margin-top:8px"});
+  var file=h("input",{type:"file",accept:".json,application/json",style:"display:none",onchange:function(e){
+    var f=e.target.files&&e.target.files[0]; if(!f) return;
+    var r=new FileReader();
+    r.onload=function(){
+      try{
+        var d=JSON.parse(r.result);
+        if(!d||!Array.isArray(d.boxes)||!Array.isArray(d.items)) throw 0;
+        state={boxes:d.boxes,items:d.items,updated:0}; save(); render(); toast("Backup eingespielt");
+      }catch(x){msg.textContent="Datei nicht lesbar.";}
+    };
+    r.readAsText(f);
+  }});
+  return h("div",{class:"card"},[
+    h("h2",null,["Excel-Export"]),
+    h("div",{class:"mute"},["Alle Kisten mit Inhalt als .xlsx: Blätter „Alle Artikel“, „Nach Kategorie“, „Kategorien“ und „Kisten“."]),
+    h("div",{class:"actions"},[h("button",{class:"pri",onclick:exportExcel},["📊 Nach Excel exportieren"])]),
+    h("h2",{style:"margin-top:20px"},["Daten sichern"]),
+    h("div",{class:"mute"},["Die Daten liegen nur auf diesem Gerät. Mach ab und zu ein Backup."]),
+    h("div",{class:"actions"},[
+      h("button",{class:"pri",onclick:function(){
+        var b=new Blob([JSON.stringify(state,null,1)],{type:"application/json"});
+        var a=document.createElement("a"); a.href=URL.createObjectURL(b);
+        a.download="lager-backup-"+new Date().toISOString().slice(0,10)+".json";
+        document.body.appendChild(a); a.click(); a.remove();
+      }},["Backup herunterladen"]),
+      h("button",{class:"ghost",onclick:function(){file.click();}},["Backup einspielen"]),
+      file
+    ]),
+    msg
+  ]);
+}
+var TABS=[["add","➕ Einlagern"],["kisten","📦 Kisten"],["kategorien","🏷️ Kategorien"],["suche","🔍 Suche"],["daten","💾 Daten"]];
+function render(){
+  var nav=document.getElementById("tabs"); nav.innerHTML="";
+  TABS.forEach(function(t){
+    nav.appendChild(h("button",{class:tab===t[0]?"on":"",onclick:function(){tab=t[0];confirmId=null;location.hash=t[0];render();}},[t[1]]));
+  });
+  var total=state.items.reduce(function(s,i){return s+i.qty;},0);
+  document.getElementById("stats").textContent=state.boxes.length+" Kisten · "+state.items.length+" Artikel · "+total+" Stück";
+  var app=document.getElementById("app"); app.innerHTML="";
+  app.appendChild(tab==="add"?viewAdd():tab==="kisten"?viewBoxes():tab==="kategorien"?viewCats():tab==="daten"?viewData():viewSearch());
+}
+window.addEventListener("hashchange",function(){
+  var t=(location.hash||"#add").slice(1);
+  if(TABS.some(function(x){return x[0]===t;}) && t!==tab){tab=t;render();}
+});
+render();
+})();
+</script>
+</body>
+</html>
