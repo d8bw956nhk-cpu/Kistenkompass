@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function stamm(sid) { return get(/databases/$(database)/documents/staemme/$(sid)).data; }
+    function isMember(sid) { return signedIn() && (request.auth.uid in stamm(sid).members); }
+    function roleOf(sid) { return stamm(sid).members[request.auth.uid].role; }
+    function isManager(sid) {
+      return isMember(sid) && (roleOf(sid) == 'leitung' || roleOf(sid) == 'wart');
+    }
+    function hasTempEdit(sid) {
+      return isMember(sid) && roleOf(sid) == 'beobachter'
+        && ('editUntil' in stamm(sid).members[request.auth.uid])
+        && request.time.toMillis() < stamm(sid).members[request.auth.uid].editUntil;
+    }
+    function canWrite(sid) { return isManager(sid) || hasTempEdit(sid); }
+
+    match /staemme/{sid} {
+      allow create: if signedIn()
+        && request.resource.data.owner == request.auth.uid
+        && request.resource.data.memberIds == [request.auth.uid]
+        && request.resource.data.members[request.auth.uid].role == 'leitung';
+
+      allow read: if signedIn() && (request.auth.uid in resource.data.memberIds);
+
+      allow update: if signedIn() && (
+        // Stammesleitung / Materialwart verwalten Rollen, der Ersteller bleibt unverändert
+        ( (request.auth.uid in resource.data.members)
+          && (resource.data.members[request.auth.uid].role == 'leitung'
+              || resource.data.members[request.auth.uid].role == 'wart')
+          && request.resource.data.owner == resource.data.owner
+          && request.resource.data.members[resource.data.owner] == resource.data.members[resource.data.owner]
+          && (resource.data.owner in request.resource.data.memberIds) )
+        ||
+        // Jedes Mitglied (außer dem Ersteller) darf sich selbst entfernen
+        ( (request.auth.uid in resource.data.memberIds)
+          && request.auth.uid != resource.data.owner
+          && !(request.auth.uid in request.resource.data.memberIds)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberIds', 'names'])
+          && request.resource.data.members.diff(resource.data.members).affectedKeys().hasOnly([request.auth.uid])
+          && request.resource.data.names.diff(resource.data.names).affectedKeys().hasOnly([request.auth.uid]) )
+      );
+
+      allow delete: if false;
+
+      match /data/{doc} {
+        allow read: if isMember(sid);
+        allow write: if canWrite(sid);
+      }
+
+      match /log/{id} {
+        allow read: if isMember(sid);
+        allow create: if canWrite(sid) && request.resource.data.uid == request.auth.uid;
+      }
+
+      match /joinRequests/{uid} {
+        allow create: if signedIn() && request.auth.uid == uid
+          && request.resource.data.code == stamm(sid).inviteCode
+          && request.resource.data.keys().hasOnly(['code', 'name', 'at']);
+        allow read: if signedIn() && (request.auth.uid == uid || isManager(sid));
+        allow delete: if signedIn() && (request.auth.uid == uid || isManager(sid));
+      }
+    }
+  }
+}

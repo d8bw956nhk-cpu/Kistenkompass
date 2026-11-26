@@ -64,6 +64,7 @@ input[type=checkbox]{width:22px;height:22px;flex:none;padding:0;accent-color:var
 <main id="app"></main>
 <div class="toast" id="toast" hidden></div>
 
+<script src="firebase-config.js"></script>
 <script id="data" type="application/json">{"boxes":[],"items":[],"updated":0}</script>
 <script>
 (function(){
@@ -73,7 +74,7 @@ input[type=checkbox]{width:22px;height:22px;flex:none;padding:0;accent-color:var
 var LS="lager-organizer-v1";
 var state=migrate(load());
 var tab=(location.hash||"#add").slice(1);
-if(["add","kisten","kategorien","suche","freizeit","daten"].indexOf(tab)<0) tab="add";
+if(["add","kisten","kategorien","suche","freizeit","stamm","daten"].indexOf(tab)<0) tab="add";
 var query="";
 var confirmId=null;
 
@@ -118,6 +119,14 @@ function claude_init(){
 }
 var sampleNS=null;
 function save(){
+  if(cloud.sid){
+    if(cloud.loading){toast("Daten werden noch geladen …");return;}
+    if(!canEditNow()){
+      if(cloud.base){try{state=migrate(JSON.parse(cloud.base));}catch(e){}}
+      toast("Nur Lesen – du darfst nichts ändern");return;
+    }
+    migrate(state);cloud.dirty=true;schedulePush();return;
+  }
   migrate(state);
   state.updated=Date.now();
   try{localStorage.setItem(LS,JSON.stringify(state));}catch(e){}
@@ -1337,6 +1346,422 @@ function initShare(){
   }catch(e){sharedErr=true;}
 }
 
+/*CLOUD-START*/
+/* ---------- Konto & Stamm (Firebase) ---------- */
+var CFG=window.FIREBASE_CONFIG||null;
+var cloudConfigured=!!(CFG&&(CFG.apiKey||CFG.mock));
+var ACT="lager-active-stamm";
+var cloud={me:null,ready:false,user:null,name:"",stamme:[],sid:null,stamm:null,role:null,loading:false,requests:[],log:[],unsubs:{},base:null,rev:0,dirty:false,pushing:false,myReq:null,pending:null,err:"",authTab:"login",inviteOpen:false};
+var FB=null,pushTimer=null,ROLE_LBL={leitung:"Stammesleitung",wart:"Materialwart",beobachter:"Beobachter"},expTimer=null;
+function isMgrRole(r){return r==="leitung"||r==="wart";}
+function isMgr(){return isMgrRole(cloud.role);}
+function canEditNow(){
+  if(isMgr()) return true;
+  return cloud.role==="beobachter"&&!!cloud.me&&cloud.me.editUntil>Date.now();
+}
+function blankState(){return {boxes:[],items:[],trips:[],alias:{}};}
+function stripState(st){return JSON.parse(JSON.stringify({boxes:st.boxes,items:st.items,trips:st.trips||[],alias:st.alias||{}}));}
+function safeRender(n){
+  var a=document.activeElement;
+  if(a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT")&&(n||0)<8){setTimeout(function(){safeRender((n||0)+1);},1000);return;}
+  render();
+}
+function loadScript(src){
+  return new Promise(function(res,rej){var s=document.createElement("script");s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s);});
+}
+function loadFirebase(){
+  if(window.firebase&&window.firebase.firestore) return Promise.resolve();
+  var v="10.12.2",b="https://www.gstatic.com/firebasejs/"+v+"/";
+  return loadScript(b+"firebase-app-compat.js").then(function(){return loadScript(b+"firebase-auth-compat.js");}).then(function(){return loadScript(b+"firebase-firestore-compat.js");});
+}
+function initCloud(){
+  if(!cloudConfigured) return;
+  loadFirebase().then(function(){
+    if(!firebase.apps.length) firebase.initializeApp(CFG);
+    FB={auth:firebase.auth(),db:firebase.firestore(),V:firebase.firestore.FieldValue};
+    FB.auth.onAuthStateChanged(onAuth);
+  },function(){cloud.err="Server nicht erreichbar (offline?).";cloud.ready=true;safeRender();});
+}
+function mergeArr(base,local,remote){
+  function map(a){var m={};(a||[]).forEach(function(x){m[x.id]=x;});return m;}
+  var B=map(base),L=map(local),R=map(remote),ids={},out=[];
+  Object.keys(L).concat(Object.keys(R)).forEach(function(id){ids[id]=1;});
+  Object.keys(ids).forEach(function(id){
+    var l=L[id],r=R[id],b=B[id];
+    var lch=l&&(!b||JSON.stringify(l)!==JSON.stringify(b));
+    if(l&&r) out.push(lch?l:r);
+    else if(l&&!r){ if(!b||lch) out.push(l); }
+    else if(!l&&r){ if(!b) out.push(r); }
+  });
+  return out;
+}
+function mergeState(base,local,remote){
+  var al={},k;
+  for(k in (remote.alias||{})) al[k]=remote.alias[k];
+  for(k in (local.alias||{})) al[k]=local.alias[k];
+  return {boxes:mergeArr(base.boxes,local.boxes,remote.boxes),items:mergeArr(base.items,local.items,remote.items),trips:mergeArr(base.trips,local.trips,remote.trips),alias:al};
+}
+function diffSummary(a,b){
+  var out=[],A={},B={};
+  (a.items||[]).forEach(function(i){A[i.id]=i;});(b.items||[]).forEach(function(i){B[i.id]=i;});
+  function bn(st,id){var x=(st.boxes||[]).filter(function(q){return q.id===id;})[0];return x?x.name:"?";}
+  Object.keys(B).forEach(function(id){
+    if(!A[id]) out.push("+"+B[id].qty+"× "+B[id].name+" → "+bn(b,B[id].box));
+    else if(A[id].qty!==B[id].qty) out.push(B[id].name+": "+A[id].qty+" → "+B[id].qty);
+  });
+  Object.keys(A).forEach(function(id){if(!B[id]) out.push("− "+A[id].name);});
+  var ab={},bb={};
+  (a.boxes||[]).forEach(function(x){ab[x.id]=x;});(b.boxes||[]).forEach(function(x){bb[x.id]=x;});
+  Object.keys(bb).forEach(function(id){if(!ab[id]) out.push("Kiste „"+bb[id].name+"“ neu");});
+  Object.keys(ab).forEach(function(id){if(!bb[id]) out.push("Kiste „"+ab[id].name+"“ gelöscht");});
+  var at={},bt={};
+  (a.trips||[]).forEach(function(x){at[x.id]=x;});(b.trips||[]).forEach(function(x){bt[x.id]=x;});
+  Object.keys(bt).forEach(function(id){
+    if(!at[id]) out.push("Freizeit „"+bt[id].name+"“ neu");
+    else if(at[id].status!==bt[id].status) out.push("Freizeit „"+bt[id].name+"“: "+STATUS_LBL[bt[id].status]);
+    else if(JSON.stringify(at[id])!==JSON.stringify(bt[id])) out.push("Freizeit „"+bt[id].name+"“ geändert");
+  });
+  Object.keys(at).forEach(function(id){if(!bt[id]) out.push("Freizeit „"+at[id].name+"“ gelöscht");});
+  return out.slice(0,4).join("; ")+(out.length>4?" … (+"+(out.length-4)+")":"");
+}
+function emailFor(first,last){
+  var f=fold(first).replace(/[^a-z0-9]+/g,""),l=fold(last).replace(/[^a-z0-9]+/g,"");
+  return (f&&l)?f+"."+l+"@lager-app.invalid":"";
+}
+function randCode(n){
+  var c="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789",o="",a=new Uint8Array(n);
+  (window.crypto||window.msCrypto).getRandomValues(a);
+  for(var i=0;i<n;i++)o+=c[a[i]%c.length];
+  return o;
+}
+function stammRef(sid){return FB.db.collection("staemme").doc(sid||cloud.sid);}
+function unsub(k){if(cloud.unsubs[k]){try{cloud.unsubs[k]();}catch(e){}delete cloud.unsubs[k];}}
+function authErr(e){
+  var c=(e&&e.code)||"";
+  if(c==="auth/email-already-in-use") return "Dieser Name ist schon registriert. Bitte anmelden oder den Nachnamen ergänzen (z. B. „Müller2“).";
+  if(c==="auth/weak-password") return "Das Passwort ist zu schwach (mindestens 6 Zeichen).";
+  if(c==="auth/network-request-failed") return "Keine Verbindung zum Server.";
+  if(/invalid-credential|wrong-password|user-not-found|invalid-login/.test(c)) return "Name oder Passwort stimmt nicht.";
+  if(c==="auth/operation-not-allowed") return "Anmeldung per E-Mail/Passwort ist im Firebase-Projekt nicht aktiviert.";
+  return "Fehler: "+(c||(e&&e.message)||"unbekannt");
+}
+function onAuth(u){
+  cloud.ready=true;
+  unsub("stammeList");unsub("myReq");
+  if(!u){deactivate(false);cloud.user=null;cloud.name="";cloud.stamme=[];safeRender();return;}
+  cloud.user={uid:u.uid};
+  if(u.displayName) cloud.name=u.displayName;
+  var q=FB.db.collection("staemme").where("memberIds","array-contains",u.uid);
+  cloud.unsubs.stammeList=q.onSnapshot(function(qs){
+    cloud.stamme=qs.docs.map(function(d){var x=d.data();x.id=d.id;return x;});
+    var want=null;try{want=localStorage.getItem(ACT);}catch(e){}
+    var found=cloud.stamme.some(function(s){return s.id===cloud.sid;});
+    if(cloud.sid&&!found) deactivate(true);
+    else if(!cloud.sid&&want&&cloud.stamme.some(function(s){return s.id===want;})) activate(want);
+    safeRender();
+  },function(e){cloud.err="Stämme konnten nicht geladen werden: "+((e&&e.code)||"");safeRender();});
+  safeRender();
+}
+function deactivate(reload){
+  ["stamm","data","log","reqs"].forEach(unsub);
+  clearTimeout(pushTimer);
+  var was=cloud.sid;
+  cloud.sid=null;cloud.stamm=null;cloud.role=null;cloud.me=null;cloud.requests=[];cloud.log=[];cloud.base=null;cloud.rev=0;cloud.dirty=false;cloud.loading=false;cloud.inviteOpen=false;
+  if(was){try{localStorage.removeItem(ACT);}catch(e){} if(reload!==false){state=migrate(load());}}
+}
+function activate(sid){
+  if(cloud.sid===sid) return;
+  deactivate(false);
+  cloud.sid=sid;cloud.loading=true;cloud.base=null;cloud.rev=0;
+  state=migrate(blankState());
+  try{localStorage.setItem(ACT,sid);}catch(e){}
+  var ref=stammRef(sid);
+  cloud.unsubs.stamm=ref.onSnapshot(function(s){
+    if(!s.exists){deactivate(true);safeRender();return;}
+    var d=s.data();cloud.stamm=d;
+    var m=d.members&&d.members[cloud.user.uid];
+    if(!m){deactivate(true);safeRender();return;}
+    cloud.role=m.role;cloud.me=m;
+    clearTimeout(expTimer);
+    if(m.role==="beobachter"&&m.editUntil>Date.now()) expTimer=setTimeout(function(){safeRender();},Math.min(m.editUntil-Date.now()+500,2147000000));
+    if(!isMgrRole(m.role)&&cloud.unsubs.reqs){unsub("reqs");cloud.requests=[];}
+    if(isMgrRole(m.role)&&!cloud.unsubs.reqs){
+      cloud.unsubs.reqs=ref.collection("joinRequests").onSnapshot(function(qs){
+        cloud.requests=qs.docs.map(function(x){var y=x.data();y.uid=x.id;return y;});safeRender();
+      },function(){});
+    }
+    safeRender();
+  },function(){});
+  cloud.unsubs.data=ref.collection("data").doc("state").onSnapshot(onRemoteData,function(e){cloud.err="Daten konnten nicht geladen werden.";safeRender();});
+  cloud.unsubs.log=ref.collection("log").orderBy("at","desc").limit(30).onSnapshot(function(qs){
+    cloud.log=qs.docs.map(function(x){return x.data();});safeRender();
+  },function(){});
+}
+function onRemoteData(snap){
+  if(!cloud.sid) return;
+  if(!snap.exists){cloud.loading=false;cloud.base=JSON.stringify(blankState());cloud.rev=0;state=migrate(blankState());safeRender();return;}
+  var d=snap.data();
+  if(!cloud.loading&&d.rev===cloud.rev) return;
+  var remote;try{remote=JSON.parse(d.json);}catch(e){return;}
+  if(cloud.dirty&&cloud.base&&!cloud.loading){
+    state=migrate(mergeState(JSON.parse(cloud.base),stripState(state),remote));
+    schedulePush();
+  } else state=migrate(remote);
+  cloud.base=d.json;cloud.rev=d.rev;cloud.loading=false;
+  safeRender();
+}
+function schedulePush(){clearTimeout(pushTimer);pushTimer=setTimeout(pushNow,1200);}
+function pushNow(){
+  if(!cloud.sid||!canEditNow()||cloud.pushing||!cloud.dirty||!cloud.user) return;
+  cloud.pushing=true;cloud.dirty=false;
+  var snapshot=stripState(state),sid=cloud.sid,oldBase=cloud.base?JSON.parse(cloud.base):blankState();
+  var ref=stammRef(sid).collection("data").doc("state");
+  FB.db.runTransaction(function(tx){
+    return tx.get(ref).then(function(s){
+      var remote=s.exists?JSON.parse(s.data().json):blankState();
+      var merged=mergeState(oldBase,snapshot,remote);
+      var rev=(s.exists?s.data().rev:0)+1;
+      tx.set(ref,{json:JSON.stringify(merged),rev:rev,by:cloud.user.uid,byName:cloud.name,at:FB.V.serverTimestamp()});
+      return {merged:merged,rev:rev};
+    });
+  }).then(function(r){
+    cloud.pushing=false;
+    if(cloud.sid!==sid) return;
+    cloud.rev=r.rev;cloud.base=JSON.stringify(r.merged);cloud.err="";
+    if(cloud.dirty){state=migrate(mergeState(snapshot,stripState(state),r.merged));schedulePush();}
+    else state=migrate(r.merged);
+    var txt=diffSummary(oldBase,snapshot);
+    if(txt) stammRef(sid).collection("log").add({uid:cloud.user.uid,name:cloud.name,text:txt.slice(0,300),at:FB.V.serverTimestamp()}).catch(function(){});
+    safeRender();
+  },function(e){
+    cloud.pushing=false;
+    if(e&&e.code==="permission-denied"){
+      cloud.dirty=false;
+      if(cloud.base){try{state=migrate(JSON.parse(cloud.base));}catch(x){}}
+      cloud.err="Keine Berechtigung – deine letzten Änderungen wurden verworfen (Bearbeitungsrecht abgelaufen?).";
+      safeRender();return;
+    }
+    cloud.dirty=true;cloud.err="Speichern auf dem Server fehlgeschlagen – wird erneut versucht.";
+    clearTimeout(pushTimer);pushTimer=setTimeout(pushNow,15000);safeRender();
+  });
+}
+function registerUser(first,last,pw,pw2){
+  first=first.trim();last=last.trim();
+  var em=emailFor(first,last);
+  if(!em) return Promise.reject({message:"Bitte Vor- und Nachnamen (mit Buchstaben) angeben."});
+  if(pw.length<6) return Promise.reject({code:"auth/weak-password"});
+  if(pw!==pw2) return Promise.reject({message:"Die Passwörter stimmen nicht überein."});
+  return FB.auth.createUserWithEmailAndPassword(em,pw).then(function(cred){
+    cloud.name=first+" "+last;
+    return cred.user.updateProfile({displayName:first+" "+last}).then(function(){cloud.name=first+" "+last;safeRender();});
+  });
+}
+function loginUser(first,last,pw){
+  var em=emailFor(first.trim(),last.trim());
+  if(!em) return Promise.reject({message:"Bitte Vor- und Nachnamen angeben."});
+  return FB.auth.signInWithEmailAndPassword(em,pw).then(function(c){cloud.name=c.user.displayName||cloud.name;});
+}
+function createStamm(name,withData){
+  var ref=FB.db.collection("staemme").doc(),uid=cloud.user.uid,names={},members={},sid=ref.id;
+  names[uid]=cloud.name;members[uid]={role:"leitung"};
+  var data=withData?stripState(state):blankState();
+  return ref.set({name:name,owner:uid,inviteCode:randCode(12),members:members,memberIds:[uid],names:names,created:FB.V.serverTimestamp()}).then(function(){
+    return ref.collection("data").doc("state").set({json:JSON.stringify(data),rev:1,by:uid,byName:cloud.name,at:FB.V.serverTimestamp()});
+  }).then(function(){return sid;});
+}
+function parseJoin(str){
+  var m=String(str||"").match(/join=([A-Za-z0-9]+)\.([A-Za-z0-9]+)(?:\.(.*))?$/)||String(str||"").trim().match(/^([A-Za-z0-9]{20})\.([A-Za-z0-9]{8,})(?:\.(.*))?$/);
+  if(!m) return null;
+  var nm="";try{nm=decodeURIComponent(m[3]||"");}catch(e){}
+  return {sid:m[1],code:m[2],name:nm.slice(0,80)};
+}
+function sendJoinRequest(p){
+  var ref=FB.db.collection("staemme").doc(p.sid).collection("joinRequests").doc(cloud.user.uid);
+  return ref.set({code:p.code,name:cloud.name,at:FB.V.serverTimestamp()}).then(function(){
+    cloud.myReq={sid:p.sid,name:p.name||"Stamm"};cloud.pending=null;
+    unsub("myReq");
+    cloud.unsubs.myReq=ref.onSnapshot(function(s){
+      if(!s.exists&&cloud.myReq){cloud.myReq=null;unsub("myReq");}
+      safeRender();
+    },function(){});
+    safeRender();
+  });
+}
+function approveReq(r,role){
+  var up={};up["members."+r.uid]={role:role};up["names."+r.uid]=r.name||"?";up.memberIds=FB.V.arrayUnion(r.uid);
+  return stammRef().update(up).then(function(){return stammRef().collection("joinRequests").doc(r.uid).delete();});
+}
+function setMemberRole(uid,role){var up={};up["members."+uid]={role:role};return stammRef().update(up);}
+function grantEdit(uid,until){var up={};up["members."+uid]={role:"beobachter",editUntil:until};return stammRef().update(up);}
+function removeMember(uid){
+  var up={};up["members."+uid]=FB.V.delete();up["names."+uid]=FB.V.delete();up.memberIds=FB.V.arrayRemove(uid);
+  return stammRef().update(up);
+}
+function inviteUrl(){
+  return location.href.split("#")[0]+"#join="+cloud.sid+"."+cloud.stamm.inviteCode+"."+encodeURIComponent(cloud.stamm.name);
+}
+function initJoin(){
+  var m=(location.hash||"").match(/^#join=(.+)$/);
+  if(!m) return;
+  var p=parseJoin("join="+m[1]);
+  if(p){cloud.pending=p;tab="stamm";}
+}
+
+/* ---------- Stamm: Ansichten ---------- */
+function errBox(){return cloud.err?h("div",{class:"card"},[h("span",{class:"warn"},["⚠ "+cloud.err])]):null;}
+function viewStamm(){
+  var wrap=h("div");
+  if(!cloudConfigured){
+    wrap.appendChild(h("div",{class:"card"},[h("h3",null,["Konten & Stämme"]),
+      h("div",{class:"mute"},["Der Server ist noch nicht eingerichtet. Folge der Datei ANLEITUNG-Firebase.md und trage die Konfiguration in firebase-config.js ein."])]));
+    return wrap;
+  }
+  if(!cloud.ready){wrap.appendChild(h("div",{class:"empty"},["Verbinde mit dem Server …"]));return wrap;}
+  var eb=errBox();if(eb) wrap.appendChild(eb);
+  if(!cloud.user) return viewAuth(wrap);
+  var logout=h("button",{class:"ghost",onclick:function(){FB.auth.signOut();}},["Abmelden"]);
+  wrap.appendChild(h("div",{class:"card"},[h("div",{class:"boxhead"},[h("div",null,[h("h3",null,["👤 "+(cloud.name||"Angemeldet")]),h("div",{class:"mute"},["Angemeldet"])]),logout])]));
+
+  if(cloud.pending){
+    var p=cloud.pending;
+    wrap.appendChild(h("div",{class:"card hit"},[h("h3",null,["Einladung zu „"+(p.name||"einem Stamm")+"“"]),
+      h("div",{class:"mute"},["Ein Admin muss dich nach der Anfrage freigeben."]),
+      h("div",{class:"actions"},[
+        h("button",{class:"pri",onclick:function(){sendJoinRequest(p).then(function(){toast("Anfrage gesendet");},function(e){cloud.err="Beitritt nicht möglich – ist der Einladungscode noch gültig?";safeRender();});}},["Beitritt anfragen"]),
+        h("button",{class:"ghost",onclick:function(){cloud.pending=null;render();}},["Verwerfen"])])]));
+  }
+  if(cloud.myReq) wrap.appendChild(h("div",{class:"card hit"},["⏳ Anfrage an „"+cloud.myReq.name+"“ gesendet – wartet auf Freigabe durch einen Admin."]));
+
+  var lc=h("div",{class:"card"},[h("h3",null,["Meine Stämme"])]);
+  if(!cloud.stamme.length) lc.appendChild(h("div",{class:"mute"},["Noch kein Stamm. Gründe einen oder tritt per Einladung bei."]));
+  cloud.stamme.forEach(function(s){
+    var role=(s.members[cloud.user.uid]||{}).role,act=cloud.sid===s.id;
+    lc.appendChild(h("div",{class:"item"},[
+      h("div",{class:"n"},["👥 "+s.name,h("small",null,[ROLE_LBL[role]||role])]),
+      act?h("span",{class:"ok"},["✓ aktiv"]):h("button",{class:"ghost",onclick:function(){activate(s.id);render();}},["Öffnen"])]));
+  });
+  if(cloud.sid) lc.appendChild(h("div",{class:"actions"},[h("button",{class:"ghost",onclick:function(){deactivate(true);render();}},["Nur lokal arbeiten"])]));
+  wrap.appendChild(lc);
+
+  var nameIn=h("input",{placeholder:"Name des Stamms",required:true});
+  var up=h("input",{type:"checkbox",checked:true});
+  var cf=h("form",{class:"add"},[h("div",null,[h("label",null,["Neuen Stamm gründen"]),nameIn]),
+    h("label",{style:"display:flex;gap:8px;align-items:center;color:var(--ink)"},[up,"Aktuelle Lagerdaten dieses Geräts hochladen"]),
+    h("button",{class:"pri",type:"submit"},["Stamm gründen"])]);
+  cf.addEventListener("submit",function(ev){
+    ev.preventDefault();if(!nameIn.value.trim()) return;
+    var withData=cloud.sid?false:up.checked;
+    createStamm(nameIn.value.trim(),withData).then(function(sid){toast("Stamm gegründet");activate(sid);render();},function(e){cloud.err="Stamm konnte nicht gegründet werden: "+((e&&e.code)||"");safeRender();});
+  });
+  wrap.appendChild(h("div",{class:"card"},[cf]));
+
+  var jIn=h("input",{placeholder:"Einladungslink einfügen"});
+  var jf=h("form",{class:"add"},[h("div",null,[h("label",null,["Stamm beitreten"]),jIn,h("div",{class:"mute"},["Oder den QR-Code des Stamms scannen."])]),h("button",{class:"ghost",type:"submit"},["Weiter"])]);
+  jf.addEventListener("submit",function(ev){ev.preventDefault();var p2=parseJoin(jIn.value);if(!p2){toast("Link nicht erkannt");return;}cloud.pending=p2;render();});
+  wrap.appendChild(h("div",{class:"card"},[jf]));
+
+  if(cloud.sid) wrap.appendChild(viewActiveStamm());
+  return wrap;
+}
+function viewAuth(wrap){
+  if(cloud.pending) wrap.appendChild(h("div",{class:"card hit"},["Einladung zu „"+(cloud.pending.name||"einem Stamm")+"“ – bitte zuerst anmelden oder registrieren."]));
+  var reg=cloud.authTab==="reg";
+  var fi=h("input",{placeholder:"Vorname",autocomplete:"given-name",required:true});
+  var la=h("input",{placeholder:"Nachname",autocomplete:"family-name",required:true});
+  var pw=h("input",{type:"password",placeholder:"Passwort",autocomplete:reg?"new-password":"current-password",required:true});
+  var pw2=h("input",{type:"password",placeholder:"Passwort wiederholen",autocomplete:"new-password"});
+  var msg=h("div",{class:"bad",style:"margin-top:4px"});
+  var btn=h("button",{class:"pri",type:"submit"},[reg?"Registrieren":"Anmelden"]);
+  var form=h("form",{class:"add"},[h("div",null,[h("label",null,["Vorname"]),fi]),h("div",null,[h("label",null,["Nachname"]),la]),
+    h("div",null,[h("label",null,["Passwort"]),pw]),reg?h("div",null,[h("label",null,["Passwort wiederholen"]),pw2]):null,btn,msg]);
+  form.addEventListener("submit",function(ev){
+    ev.preventDefault();btn.disabled=true;msg.textContent="";
+    var p=reg?registerUser(fi.value,la.value,pw.value,pw2.value):loginUser(fi.value,la.value,pw.value);
+    p.then(function(){},function(e){btn.disabled=false;msg.textContent=(e&&e.message&&!e.code)?e.message:authErr(e);});
+  });
+  wrap.appendChild(h("div",{class:"card"},[
+    h("div",{class:"actions",style:"margin:0 0 10px"},[
+      h("button",{class:reg?"ghost":"pri",onclick:function(){cloud.authTab="login";render();}},["Anmelden"]),
+      h("button",{class:reg?"pri":"ghost",onclick:function(){cloud.authTab="reg";render();}},["Registrieren"])]),
+    form,
+    h("div",{class:"mute",style:"margin-top:10px"},["Hinweis: Dein Name dient als Benutzername. Es gibt keine Passwort-Zurücksetzung – merke dir das Passwort gut."])]));
+  return wrap;
+}
+function fmtUntil(ms){
+  var d=new Date(ms);
+  return d.toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+}
+var DURATIONS=[["1 Stunde",3600000],["4 Stunden",14400000],["1 Tag",86400000],["7 Tage",604800000]];
+function viewActiveStamm(){
+  var st=cloud.stamm,c=h("div");
+  if(!st){c.appendChild(h("div",{class:"empty"},["Lade Stamm …"]));return c;}
+  var mgr=isMgr(),me=cloud.user.uid,now=Date.now();
+  var mc=h("div",{class:"card"},[h("h3",null,["👥 "+st.name]),
+    h("div",{class:"mute"},["Deine Rolle: "+(ROLE_LBL[cloud.role]||cloud.role)+(st.owner===me?" (Ersteller)":"")])]);
+  Object.keys(st.members||{}).sort(function(a,b){return sortDe((st.names||{})[a]||"",(st.names||{})[b]||"");}).forEach(function(uid){
+    var m=st.members[uid],role=m.role,self=uid===me,isOwner=uid===st.owner;
+    var active=role==="beobachter"&&m.editUntil&&m.editUntil>now;
+    var label=((st.names||{})[uid]||"?")+(self?" (du)":"")+(isOwner?" · Ersteller":"");
+    var small=active?"✏️ Bearbeiten erlaubt bis "+fmtUntil(m.editUntil):"";
+    var right=[];
+    if(mgr&&!isOwner&&!self){
+      var sel=h("select",{style:"max-width:150px"},["leitung","wart","beobachter"].map(function(r){return h("option",{value:r,selected:r===role},[ROLE_LBL[r]]);}));
+      sel.addEventListener("change",function(){setMemberRole(uid,sel.value);});
+      right.push(sel,h("button",{class:"ghost danger",onclick:function(){if(confirmId==="rm"+uid){confirmId=null;removeMember(uid);}else{confirmId="rm"+uid;render();}}},[confirmId==="rm"+uid?"Sicher?":"✕"]));
+    } else right.push(h("span",{class:"mute"},[ROLE_LBL[role]||role]));
+    var row=h("div",{class:"item",style:"flex-wrap:wrap"},[h("div",{class:"n"},[label,small?h("small",null,[small]):null])].concat(right));
+    if(mgr&&role==="beobachter"&&!isOwner){
+      var dsel=h("select",{style:"max-width:130px"},DURATIONS.map(function(dd){return h("option",{value:String(dd[1])},[dd[0]]);}));
+      var ctl=[h("span",{class:"mute"},["Befristet bearbeiten:"]),dsel,
+        h("button",{class:"ghost",onclick:function(){grantEdit(uid,Date.now()+parseInt(dsel.value,10)).then(function(){toast("Bearbeiten erlaubt");},function(){toast("Fehler");});}},["Erlauben"])];
+      if(active) ctl.push(h("button",{class:"ghost danger",onclick:function(){setMemberRole(uid,"beobachter");}},["Entziehen"]));
+      row.appendChild(h("div",{style:"width:100%;display:flex;gap:6px;align-items:center;flex-wrap:wrap"},ctl));
+    }
+    mc.appendChild(row);
+  });
+  c.appendChild(mc);
+  if(mgr){
+    var rc=h("div",{class:"card"},[h("h3",null,["Beitrittsanfragen"])]);
+    if(!cloud.requests.length) rc.appendChild(h("div",{class:"mute"},["Keine offenen Anfragen."]));
+    cloud.requests.forEach(function(r){
+      var sel=h("select",{style:"max-width:150px"},["beobachter","wart","leitung"].map(function(x){return h("option",{value:x},[ROLE_LBL[x]]);}));
+      rc.appendChild(h("div",{class:"item",style:"flex-wrap:wrap"},[h("div",{class:"n"},[r.name||"?",h("small",null,["Rolle zuweisen:"])]),sel,
+        h("button",{class:"pri",style:"padding:6px 10px",onclick:function(){approveReq(r,sel.value).then(function(){toast("Freigegeben");},function(){toast("Fehler beim Freigeben");});}},["Freigeben"]),
+        h("button",{class:"ghost danger",onclick:function(){stammRef().collection("joinRequests").doc(r.uid).delete();}},["Ablehnen"])]));
+    });
+    c.appendChild(rc);
+    var ic=h("div",{class:"card"},[h("div",{class:"boxhead"},[h("h3",null,["Einladen per QR-Code"]),
+      h("button",{class:"ghost",onclick:function(){cloud.inviteOpen=!cloud.inviteOpen;render();}},[cloud.inviteOpen?"Schließen":"Anzeigen"])])]);
+    if(cloud.inviteOpen){
+      var url=inviteUrl(),holder=h("div",{style:"max-width:280px;margin:10px auto"});
+      try{holder.innerHTML=qrSvg(url);}catch(e){}
+      ic.appendChild(holder);
+      ic.appendChild(h("input",{value:url,readonly:true,onclick:function(e){e.target.select();}}));
+      ic.appendChild(h("div",{class:"actions"},[h("button",{class:"ghost",onclick:function(){copyText(url);}},["Link kopieren"]),
+        h("button",{class:"ghost danger",onclick:function(){
+          if(confirmId==="code"){confirmId=null;stammRef().update({inviteCode:randCode(12)}).then(function(){toast("Neuer Code – alter Link ungültig");});}
+          else{confirmId="code";render();}
+        }},[confirmId==="code"?"Sicher? Alter Link wird ungültig":"Neuen Code erzeugen"])]));
+      ic.appendChild(h("div",{class:"mute",style:"margin-top:8px"},["Wer scannt, meldet sich an und stellt eine Anfrage. Stammesleitung oder Materialwart geben sie oben mit einer Rolle frei."]));
+    }
+    c.appendChild(ic);
+  }
+  var lc=h("div",{class:"card"},[h("h3",null,["Änderungsverlauf"])]);
+  if(!cloud.log.length) lc.appendChild(h("div",{class:"mute"},["Noch keine Änderungen."]));
+  cloud.log.forEach(function(l){
+    var t=l.at&&l.at.toDate?l.at.toDate():(typeof l.at==="number"?new Date(l.at):null);
+    var ts=t?t.toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"…";
+    lc.appendChild(h("div",{class:"item"},[h("div",{class:"n"},[l.text||"",h("small",null,[(l.name||"?")+" · "+ts])])]));
+  });
+  c.appendChild(lc);
+  if(st.owner!==me) c.appendChild(h("button",{class:"ghost danger",onclick:function(){
+    if(confirmId==="leave"){confirmId=null;removeMember(me).then(function(){toast("Stamm verlassen");});}
+    else{confirmId="leave";render();}
+  }},[confirmId==="leave"?"Sicher? Stamm verlassen":"Stamm verlassen"]));
+  return c;
+}
+/*CLOUD-END*/
+
 function viewData(){
   var msg=h("div",{class:"mute",style:"margin-top:8px"});
   var file=h("input",{type:"file",accept:".json,application/json",style:"display:none",onchange:function(e){
@@ -1370,19 +1795,24 @@ function viewData(){
     msg
   ]);
 }
-var TABS=[["add","➕ Einlagern"],["kisten","📦 Kisten"],["kategorien","🏷️ Kategorien"],["suche","🔍 Suche"],["freizeit","🏕️ Freizeit"],["daten","💾 Daten"]];
+var TABS=[["add","➕ Einlagern"],["kisten","📦 Kisten"],["kategorien","🏷️ Kategorien"],["suche","🔍 Suche"],["freizeit","🏕️ Freizeit"],["stamm","👥 Stamm"],["daten","💾 Daten"]];
 function render(){
   var nav=document.getElementById("tabs"); nav.innerHTML="";
   TABS.forEach(function(t){
     nav.appendChild(h("button",{class:tab===t[0]?"on":"",onclick:function(){tab=t[0];confirmId=null;addingEntryId=null;location.hash=t[0];render();}},[t[1]]));
   });
   var total=state.items.reduce(function(s,i){return s+i.qty;},0);
-  document.getElementById("stats").textContent=state.boxes.length+" Kisten · "+state.items.length+" Artikel · "+total+" Stück";
+  document.getElementById("stats").textContent=state.boxes.length+" Kisten · "+state.items.length+" Artikel · "+total+" Stück"+(cloud.sid&&cloud.stamm?" · 👥 "+cloud.stamm.name:"");
   var app=document.getElementById("app"); app.innerHTML="";
+  if(cloud.sid&&cloud.role&&!canEditNow()) app.appendChild(h("div",{class:"card hit"},["👁️ Beobachter – du siehst alle Änderungen live. Bearbeiten nur mit befristeter Erlaubnis von Stammesleitung oder Materialwart."]));
+  if(cloud.sid&&cloud.role==="beobachter"&&canEditNow()) app.appendChild(h("div",{class:"card hit"},["✏️ Bearbeiten erlaubt bis "+fmtUntil(cloud.me.editUntil)]));
+  if(cloud.sid&&cloud.loading) app.appendChild(h("div",{class:"empty"},["Stammdaten werden geladen …"]));
   if(shared||sharedErr) app.appendChild(viewShared());
-  app.appendChild(tab==="add"?viewAdd():tab==="kisten"?viewBoxes():tab==="kategorien"?viewCats():tab==="daten"?viewData():tab==="freizeit"?viewTrips():viewSearch());
+  app.appendChild(tab==="add"?viewAdd():tab==="kisten"?viewBoxes():tab==="kategorien"?viewCats():tab==="daten"?viewData():tab==="freizeit"?viewTrips():tab==="stamm"?viewStamm():viewSearch());
 }
 initShare();
+initJoin();
+initCloud();
 window.addEventListener("hashchange",function(){
   var t=(location.hash||"#add").slice(1);
   if(TABS.some(function(x){return x[0]===t;}) && t!==tab){tab=t;render();}
