@@ -22,7 +22,8 @@ h1{font-size:22px;margin:0}
 .sub{color:var(--mute);font-size:14px}
 main{max-width:760px;margin:auto;padding:0 12px}
 .tabs{display:flex;gap:6px;position:sticky;top:0;background:var(--bg);padding:8px 12px;z-index:5;max-width:760px;margin:auto}
-.tabs button{flex:1;padding:10px 4px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font:inherit;font-size:14px;cursor:pointer}
+.tabs{overflow-x:auto}
+.tabs button{flex:1 0 auto;white-space:nowrap;padding:10px 12px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font:inherit;font-size:14px;cursor:pointer}
 .tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
 .card h2,.card h3{margin:0 0 8px;font-size:17px}
@@ -46,6 +47,9 @@ button.ghost.danger{color:var(--bad)}
 .empty{color:var(--mute);text-align:center;padding:24px 8px}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:99px;font-size:14px;z-index:10;max-width:90vw}
 .actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.ok{color:var(--ok);font-weight:600}.warn{color:#d97706;font-weight:600}.bad{color:var(--bad);font-weight:600}
+textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;min-height:96px}
+.bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden;margin:8px 0}.bar>i{display:block;height:100%;background:var(--ok)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .hit{background:var(--acc2)}
 </style>
@@ -68,7 +72,7 @@ button.ghost.danger{color:var(--bad)}
 var LS="lager-organizer-v1";
 var state=migrate(load());
 var tab=(location.hash||"#add").slice(1);
-if(["add","kisten","kategorien","suche","daten"].indexOf(tab)<0) tab="add";
+if(["add","kisten","kategorien","suche","freizeit","daten"].indexOf(tab)<0) tab="add";
 var query="";
 var confirmId=null;
 
@@ -82,6 +86,8 @@ function load(){
   return emb;
 }
 function migrate(st){
+  if(!Array.isArray(st.trips)) st.trips=[];
+  if(!st.alias||typeof st.alias!=="object") st.alias={};
   st.boxes.forEach(function(b){
     if(!b.cat){
       var m={},best="Sonstiges",bq=-1;
@@ -546,6 +552,418 @@ function exportExcel(){
 }
 /*XLSX-END*/
 
+/* ---------- Freizeit: intelligenter Abgleich ---------- */
+var STOP={"der":1,"die":1,"das":1,"und":1,"mit":1,"fur":1,"von":1,"in":1,"im":1,"aus":1,"zum":1,"zur":1,"ein":1,"eine":1,"div":1,"diverse":1,"etc":1,"ca":1,"stk":1,"stuck":1,"st":1};
+function fold(s){return String(s).toLowerCase().replace(/ä/g,"a").replace(/ö/g,"o").replace(/ü/g,"u").replace(/ß/g,"ss").replace(/[éèê]/g,"e").replace(/ae/g,"a").replace(/oe/g,"o").replace(/ue/g,"u");}
+function stem(t){
+  if(/^\d+$/.test(t)||t.length<5) return t;
+  var suf=["innen","ern","en","er","e","n","s"];
+  for(var i=0;i<suf.length;i++){
+    if(t.slice(-suf[i].length)===suf[i] && t.length-suf[i].length>=3) return t.slice(0,-suf[i].length);
+  }
+  return t;
+}
+function tokens(str){
+  var out=[],re=/\(([^)]*)\)|([^()]+)/g,m;
+  str=String(str);
+  while((m=re.exec(str))){
+    var inner=m[1]!==undefined, txt=inner?m[1]:m[2], w=inner?0.4:1;
+    fold(txt).split(/[^a-z0-9]+/).forEach(function(t){
+      if(!t||STOP[t]) return;
+      out.push({t:stem(t),w:w});
+    });
+  }
+  return out;
+}
+var SYN={};
+[["wimpel","fahne","flagge","banner"],["eimer","kubel"],["laterne","lampe","leuchte","licht"],["seil","schnur","leine","tau"],
+ ["schlager","racket"],["feuerschale","feuerkorb"],["topf","kochtopf"],["pfanne","bratpfanne"],["messer","kuechenmesser"],
+ ["tuete","beutel","sack"],["kanister","kanne"],["decke","plaid"],["plane","tarp"],["zelt","jurte","kohte"],["axt","beil"],
+ ["sage","buegelsage","feinsage"],["spritze","wasserspritze","wasserpistole"],["handschuh","fausthandschuh"],
+ ["tisch","klapptisch"],["bank","bierbank","sitzbank"],["verbandskasten","sanikiste","sanitaetskiste","apotheke"],
+ ["schlafsack","schlafi"],["ball","fussball","volleyball"],["spiel","spiele"]].forEach(function(g,i){
+  g.forEach(function(w){SYN[stem(fold(w))]=i;});
+});
+function lev(a,b){
+  var m=a.length,n=b.length,p=[],i,j;
+  for(j=0;j<=n;j++)p[j]=j;
+  for(i=1;i<=m;i++){
+    var prev=p[0];p[0]=i;
+    for(j=1;j<=n;j++){
+      var tmp=p[j];
+      p[j]=Math.min(p[j]+1,p[j-1]+1,prev+(a.charAt(i-1)===b.charAt(j-1)?0:1));
+      prev=tmp;
+    }
+  }
+  return p[n];
+}
+function tokSim(a,b){
+  if(a===b) return 1;
+  if(SYN[a]!==undefined && SYN[a]===SYN[b]) return 0.95;
+  if(/^\d+$/.test(a)||/^\d+$/.test(b)) return 0;
+  var sh=a.length<b.length?a:b, lo=a.length<b.length?b:a;
+  if(sh.length>=4 && lo.indexOf(sh)>=0) return 0.8;
+  var r=1-lev(a,b)/Math.max(a.length,b.length);
+  return r>=0.75?r*0.9:0;
+}
+function cover(A,B){
+  var num=0,den=0;
+  A.forEach(function(x){var best=0;B.forEach(function(y){var s=tokSim(x.t,y.t);if(s>best)best=s;});num+=x.w*best;den+=x.w;});
+  return den?num/den:0;
+}
+function grams(s){var g={},n=0;if(s.length<3){g[s]=1;return{g:g,n:1};}for(var i=0;i<=s.length-3;i++){var k=s.substr(i,3);g[k]=(g[k]||0)+1;n++;}return{g:g,n:n};}
+function dice(a,b){
+  if(!a||!b) return 0;
+  var A=grams(a),B=grams(b),inter=0;
+  Object.keys(A.g).forEach(function(k){if(B.g[k])inter+=Math.min(A.g[k],B.g[k]);});
+  return 2*inter/(A.n+B.n);
+}
+function scoreNames(q,e){
+  var A=tokens(q),B=tokens(e);
+  if(!A.length||!B.length) return 0;
+  var c1=cover(A,B),c2=cover(B,A);
+  var ts=0.65*Math.max(c1,c2)+0.35*Math.min(c1,c2);
+  var exact=A.every(function(x){return B.some(function(y){return y.t===x.t;});});
+  if(exact) ts=Math.min(1,ts+0.2);
+  var ja=A.map(function(x){return x.t;}).join(""),jb=B.map(function(x){return x.t;}).join("");
+  return Math.max(ts,0.95*dice(ja,jb));
+}
+function normKey(s){return tokens(s).map(function(x){return x.t;}).sort().join(" ");}
+var SURE=0.75, MAYBE=0.5;
+
+function parseLine(text){
+  text=String(text).trim();
+  if(!text) return null;
+  var m;
+  if((m=text.match(/^(\d+)\s*(?:[x×*]\s*|\s+)(.+)$/i))) return {qty:parseInt(m[1],10),name:m[2].trim(),alt:null};
+  if((m=text.match(/^(.+?)\s*(?:[:=]\s*|[x×]\s*|\(\s*)(\d+)\s*\)?\s*(?:stk\.?|stück)?$/i))) return {qty:parseInt(m[2],10),name:m[1].trim(),alt:null};
+  if((m=text.match(/^(.+?)\s+(\d+)$/))) return {qty:1,name:text,alt:{qty:parseInt(m[2],10),name:m[1].trim()}};
+  return {qty:1,name:text,alt:null};
+}
+function rankEntries(name,entries){
+  var key=normKey(name);
+  return entries.map(function(en){
+    var sc=scoreNames(name,en.name);
+    if(state.alias[key] && state.alias[key]===normKey(en.name)) sc=2;
+    return {entry:en,score:sc};
+  }).sort(function(a,b){return b.score-a.score;});
+}
+function backOf(t,e){
+  var n=e.manual||0;
+  t.lines.forEach(function(l){if(l.entryId===e.id) n+=l.qty;});
+  return n;
+}
+function makeLine(t,text){
+  var p=parseLine(text);
+  if(!p) return null;
+  var r=rankEntries(p.name,t.entries);
+  if(p.alt){
+    var r2=rankEntries(p.alt.name,t.entries);
+    var s1=r[0]?r[0].score:0, s2=r2[0]?r2[0].score:0;
+    if(s2>s1+0.05||(s1<MAYBE&&s2<MAYBE)){p={qty:p.alt.qty,name:p.alt.name};r=r2;}
+  }
+  var l={id:uid(),text:String(text).trim(),name:p.name,qty:Math.max(1,p.qty||1),entryId:null,score:0,flag:"none"};
+  var top=r[0];
+  if(top && top.score>=MAYBE){
+    var pick=top, second=r[1];
+    var ambig=second && second.score>=MAYBE && top.score-second.score<0.08;
+    if(ambig && backOf(t,top.entry)>=top.entry.qty && backOf(t,second.entry)<second.entry.qty) pick=second;
+    l.entryId=pick.entry.id; l.score=Math.min(1,pick.score);
+    l.flag=pick.score>=1.5?"":(ambig?"ambig":(pick.score<SURE?"maybe":""));
+  }
+  return l;
+}
+function linkItem(name){
+  var best=null,bs=0;
+  state.items.forEach(function(it){
+    var sc=norm(it.name)===norm(name)?1:scoreNames(name,it.name);
+    if(sc>bs){bs=sc;best=it;}
+  });
+  return bs>=0.78?best:null;
+}
+function itemById(id){return state.items.filter(function(i){return i.id===id;})[0];}
+function copyText(txt){
+  try{navigator.clipboard.writeText(txt).then(function(){toast("Kopiert");},function(){toast("Kopieren nicht möglich");});}
+  catch(e){toast("Kopieren nicht möglich");}
+}
+
+/* ---------- Freizeit: Aktionen ---------- */
+var tripId=null, addingEntryId=null;
+function curTrip(){return state.trips.filter(function(t){return t.id===tripId;})[0];}
+function tripStats(t){
+  var packed=0,back=0,miss=0;
+  t.entries.forEach(function(e){var b=backOf(t,e);packed+=e.qty;back+=Math.min(b,e.qty);miss+=Math.max(0,e.qty-b);});
+  return {packed:packed,back:back,miss:miss};
+}
+function packAdd(t,name,qty,item){
+  qty=Math.max(1,parseInt(qty,10)||1);
+  name=name.trim();
+  item=item||linkItem(name);
+  var disp=item?item.name:name;
+  var ex=t.entries.filter(function(e){return item?e.itemId===item.id:(!e.itemId&&norm(e.name)===norm(disp));})[0];
+  if(ex){ex.qty+=qty;return ex;}
+  var e={id:uid(),name:disp,qty:qty,itemId:item?item.id:null,manual:0};
+  t.entries.push(e);
+  return e;
+}
+function packBox(t,boxId){
+  var n=0;
+  boxItems(boxId).forEach(function(it){packAdd(t,it.name,it.qty,it);n++;});
+  return n;
+}
+function setLine(t,l,entryId){
+  l.entryId=entryId||null; l.flag=entryId?"user":"none"; l.score=entryId?1:0;
+  if(entryId){
+    var e=t.entries.filter(function(x){return x.id===entryId;})[0];
+    if(e){var k=normKey(l.name),ek=normKey(e.name);if(k&&k!==ek) state.alias[k]=ek;}
+  }
+  save();render();
+}
+function deductMissing(t){
+  var n=0;
+  t.entries.forEach(function(e){
+    var miss=Math.max(0,e.qty-backOf(t,e)), delta=miss-(e.deducted||0);
+    if(delta<=0||!e.itemId) return;
+    var it=itemById(e.itemId); if(!it) return;
+    it.qty-=delta; e.deducted=(e.deducted||0)+delta; n+=delta;
+    if(it.qty<=0) state.items=state.items.filter(function(i){return i.id!==it.id;});
+  });
+  confirmId=null; save(); render(); toast(n+" Stück vom Bestand abgebucht");
+}
+
+/* ---------- Freizeit: Ansichten ---------- */
+var STATUS_LBL={pack:"Packliste",back:"Rückgabe",done:"Abgeschlossen"};
+function viewTrips(){
+  var t=curTrip();
+  if(!t) return viewTripList();
+  return t.status==="pack"?viewPack(t):viewBack(t);
+}
+function viewTripList(){
+  var wrap=h("div");
+  var nameIn=h("input",{placeholder:"z. B. Sommerlager 2027",required:true});
+  var dateIn=h("input",{type:"date"});
+  var form=h("form",{class:"add"},[
+    h("div",null,[h("label",null,["Name der Freizeit"]),nameIn]),
+    h("div",null,[h("label",null,["Datum (optional)"]),dateIn]),
+    h("button",{class:"pri",type:"submit"},["Packliste anlegen"])
+  ]);
+  form.addEventListener("submit",function(ev){
+    ev.preventDefault();
+    if(!nameIn.value.trim()) return;
+    var t={id:uid(),name:nameIn.value.trim(),date:dateIn.value||"",status:"pack",entries:[],lines:[]};
+    state.trips.push(t); tripId=t.id; save(); render();
+  });
+  wrap.appendChild(h("div",{class:"card"},[h("h2",null,["Neue Freizeit"]),form]));
+  if(!state.trips.length){wrap.appendChild(h("div",{class:"empty"},["Noch keine Freizeit. Lege oben eine Packliste an."]));return wrap;}
+  state.trips.slice().reverse().forEach(function(t){
+    var st=tripStats(t), isConf=confirmId===t.id;
+    var info=t.entries.length+" Positionen · "+st.packed+" Stück";
+    if(t.status!=="pack") info+=" · "+(st.miss?st.miss+" fehlen":"vollständig");
+    wrap.appendChild(h("div",{class:"card"},[
+      h("div",{class:"boxhead"},[
+        h("div",null,[h("h3",null,["🏕️ "+t.name]),h("div",{class:"mute"},[(t.date?t.date+" · ":"")+STATUS_LBL[t.status]+" · "+info])]),
+        h("button",{class:"ghost danger",onclick:function(){
+          if(isConf){state.trips=state.trips.filter(function(x){return x.id!==t.id;});confirmId=null;save();render();}
+          else{confirmId=t.id;render();}
+        }},[isConf?"Sicher?":"✕"])
+      ]),
+      h("div",{class:"actions"},[h("button",{class:"pri",onclick:function(){tripId=t.id;render();}},["Öffnen"])])
+    ]));
+  });
+  return wrap;
+}
+function backBtn(){return h("button",{class:"ghost",onclick:function(){tripId=null;addingEntryId=null;render();}},["← Alle Freizeiten"]);}
+
+function viewPack(t){
+  var wrap=h("div");
+  wrap.appendChild(backBtn());
+  var seen={},names=[];
+  state.items.forEach(function(i){if(!seen[norm(i.name)]){seen[norm(i.name)]=1;names.push(i.name);}});
+  names.sort(sortDe);
+  var nameIn=h("input",{id:"p-name",list:"itemnames",placeholder:"Material (aus dem Lager oder neu)",autocomplete:"off"});
+  var qtyIn=h("input",{type:"number",min:"1",value:"1",inputmode:"numeric"});
+  var dl=h("datalist",{id:"itemnames"},names.map(function(n){return h("option",{value:n});}));
+  var form=h("form",{class:"add"},[
+    h("div",{class:"row"},[h("div",null,[h("label",null,["Anzahl"]),qtyIn]),h("div",null,[h("label",null,["Material"]),nameIn,dl])]),
+    h("button",{class:"pri",type:"submit"},["Zur Packliste"])
+  ]);
+  form.addEventListener("submit",function(ev){
+    ev.preventDefault();
+    var n=nameIn.value.trim(); if(!n) return;
+    var e=packAdd(t,n,qtyIn.value);
+    save(); toast("✓ "+e.name+(e.itemId?" (aus dem Lager)":" (nicht im Lager erfasst)"));
+    render(); setTimeout(function(){var x=document.getElementById("p-name");if(x)x.focus();},0);
+  });
+  var boxSel=h("select",null,[h("option",{value:""},["Ganze Kiste mitnehmen …"])].concat(
+    state.boxes.slice().sort(function(a,b){return sortDe(a.name,b.name);}).map(function(b){return h("option",{value:b.id},[b.name+" ("+boxItems(b.id).length+")"]);})));
+  wrap.appendChild(h("div",{class:"card"},[
+    h("h2",null,["🏕️ "+t.name]),
+    h("div",{class:"mute",style:"margin-bottom:8px"},["Packliste: Was kommt mit?"]),
+    form,
+    h("div",{class:"actions"},[boxSel,h("button",{class:"ghost",onclick:function(){
+      if(!boxSel.value) return;
+      var n=packBox(t,boxSel.value); save(); toast(n+" Positionen hinzugefügt"); render();
+    }},["Einpacken"])])
+  ]));
+  if(!t.entries.length){wrap.appendChild(h("div",{class:"empty"},["Die Packliste ist noch leer."]));return wrap;}
+  var card=h("div",{class:"card"},[h("h3",null,["Packliste ("+t.entries.length+")"])]);
+  t.entries.forEach(function(e){
+    var it=e.itemId?itemById(e.itemId):null, b=it?boxById(it.box):null;
+    var small;
+    if(it){
+      small=h("small",null,["📦 "+(b?b.name:"?")+" · im Lager: "+it.qty+" ",e.qty>it.qty?h("span",{class:"warn"},["⚠ zu wenig"]):null]);
+    } else small=h("small",null,[h("span",{class:"warn"},["nicht im Lager erfasst"])]);
+    card.appendChild(h("div",{class:"item"},[
+      h("div",{class:"n"},[e.name,small]),
+      h("div",{class:"qty"},[
+        h("button",{onclick:function(){e.qty-=1;if(e.qty<=0)t.entries=t.entries.filter(function(x){return x.id!==e.id;});save();render();}},["−"]),
+        h("b",null,[e.qty]),
+        h("button",{onclick:function(){e.qty+=1;save();render();}},["+"])
+      ]),
+      h("button",{class:"ghost danger",onclick:function(){t.entries=t.entries.filter(function(x){return x.id!==e.id;});save();render();}},["✕"])
+    ]));
+  });
+  wrap.appendChild(card);
+  wrap.appendChild(h("button",{class:"pri",style:"width:100%;margin-top:8px",onclick:function(){t.status="back";save();render();}},["Packliste fertig → Rückgabe starten"]));
+  return wrap;
+}
+
+function flagBadge(l){
+  var pct=Math.round(l.score*100)+"%";
+  if(l.flag==="user") return h("span",{class:"ok"},["✓ bestätigt"]);
+  if(l.flag==="") return h("span",{class:"ok"},["✓ erkannt ("+pct+")"]);
+  if(l.flag==="none") return h("span",{class:"bad"},["✗ keine Zuordnung"]);
+  return h("span",{class:"warn"},["⚠ bitte prüfen ("+pct+")"+(l.flag==="ambig"?" · mehrdeutig":"")]);
+}
+
+function viewBack(t){
+  var ro=t.status==="done";
+  var wrap=h("div");
+  wrap.appendChild(backBtn());
+  var st=tripStats(t), pct=st.packed?Math.round(st.back/st.packed*100):0;
+  wrap.appendChild(h("div",{class:"card"},[
+    h("h2",null,["🏕️ "+t.name+(ro?" (abgeschlossen)":"")]),
+    h("div",null,[st.back+" von "+st.packed+" Stück zurück · ",st.miss?h("span",{class:"bad"},[st.miss+" fehlen"]):h("span",{class:"ok"},["alles da ✓"])]),
+    h("div",{class:"bar"},[h("i",{style:"width:"+pct+"%"})])
+  ]));
+
+  if(!ro){
+    var ta=h("textarea",{placeholder:"Eine Zeile pro Material, z. B.\n3x Bälle\nWasserkanister 7\nFlaggen"});
+    var btn=h("button",{class:"pri"},["Zuordnen"]);
+    btn.addEventListener("click",function(){
+      var parts=ta.value.split(/\n|;/),n=0,check=0;
+      parts.forEach(function(p){var l=makeLine(t,p);if(l){t.lines.push(l);n++;if(l.flag!==""&&l.flag!=="user")check++;}});
+      if(!n) return;
+      save(); render(); toast(n+" Zeilen zugeordnet"+(check?" – "+check+" bitte prüfen":""));
+    });
+    wrap.appendChild(h("div",{class:"card"},[
+      h("h3",null,["Rückgabe eintippen"]),
+      h("div",{class:"mute",style:"margin-bottom:8px"},["Auch bei anderen Bezeichnungen (z. B. „Flaggen“ statt „Fahnen“) wird das passende Material erkannt."]),
+      ta,h("div",{class:"actions"},[btn])
+    ]));
+  }
+
+  if(t.lines.length){
+    var lc=h("div",{class:"card"},[h("h3",null,["Zuordnung der Eingaben"])]);
+    t.lines.forEach(function(l){
+      var sel=h("select",{disabled:ro,style:"max-width:46%"},[h("option",{value:""},["– nicht zugeordnet –"])].concat(
+        t.entries.map(function(e){return h("option",{value:e.id,selected:l.entryId===e.id},[e.name]);})));
+      sel.addEventListener("change",function(){setLine(t,l,sel.value);});
+      var extra=[];
+      if(!ro&&!l.entryId) extra.push(h("button",{class:"ghost",onclick:function(){
+        var e={id:uid(),name:l.name,qty:0,itemId:null,manual:0};
+        var it=linkItem(l.name); if(it){e.itemId=it.id;e.name=it.name;}
+        t.entries.push(e); setLine(t,l,e.id);
+      }},["+ Zusätzliches Material"]));
+      lc.appendChild(h("div",{class:"item",style:"flex-wrap:wrap"},[
+        h("div",{class:"n"},[l.qty+"× "+l.name,h("small",null,[flagBadge(l)])]),
+        sel,
+        ro?null:h("button",{class:"ghost danger",onclick:function(){t.lines=t.lines.filter(function(x){return x.id!==l.id;});save();render();}},["✕"]),
+        extra.length?h("div",{style:"width:100%"},extra):null
+      ]));
+    });
+    wrap.appendChild(lc);
+  }
+
+  var ec=h("div",{class:"card"},[h("h3",null,["Packliste – Rückgabe"])]);
+  if(!ro&&st.miss) ec.appendChild(h("div",{class:"actions",style:"margin:0 0 6px"},[h("button",{class:"ghost",onclick:function(){
+    t.entries.forEach(function(e){var m=e.qty-backOf(t,e);if(m>0)e.manual=(e.manual||0)+m;});save();render();
+  }},["Alles vollständig zurück"])]));
+  t.entries.forEach(function(e){
+    var b=backOf(t,e), miss=Math.max(0,e.qty-b), extra=Math.max(0,b-e.qty);
+    var badge=e.qty===0?h("span",{class:"warn"},["zusätzlich"]):miss?h("span",{class:"bad"},["fehlt: "+miss]):extra?h("span",{class:"warn"},["+"+extra+" mehr"]):h("span",{class:"ok"},["✓ vollständig"]);
+    ec.appendChild(h("div",{class:"item"},[
+      h("div",{class:"n"},[e.name,h("small",null,["mit: "+e.qty+" · zurück: "+b+" · ",badge])]),
+      ro?null:h("div",{class:"qty"},[
+        h("button",{onclick:function(){if((e.manual||0)>0){e.manual--;save();render();}}},["−"]),
+        h("b",null,[b]),
+        h("button",{onclick:function(){e.manual=(e.manual||0)+1;save();render();}},["+"])
+      ])
+    ]));
+  });
+  wrap.appendChild(ec);
+
+  /* Wieder ins Lager */
+  var groups={},order=[];
+  t.entries.forEach(function(e){
+    var b=backOf(t,e); if(b<=0) return;
+    var it=e.itemId?itemById(e.itemId):null, bx=it?boxById(it.box):null;
+    var label=bx?("📦 "+bx.name+(bx.place?" ("+bx.place+")":"")):"Nicht im Lager erfasst";
+    if(!groups[label]){groups[label]=[];order.push(label);}
+    groups[label].push({e:e,b:b,known:!!bx});
+  });
+  var pc=h("div",{class:"card"},[h("h3",null,["Wieder ins Lager"])]);
+  if(!order.length) pc.appendChild(h("div",{class:"mute"},["Noch nichts zurück."]));
+  order.sort(sortDe).forEach(function(label){
+    pc.appendChild(h("div",{class:"mute",style:"margin-top:8px;font-weight:600"},[label]));
+    groups[label].forEach(function(r){
+      var row=[h("div",{class:"n"},[r.b+"× "+r.e.name])];
+      if(!r.known&&!ro){
+        if(addingEntryId===r.e.id){
+          var bi=h("input",{placeholder:"In welche Kiste?",list:"tbox",style:"max-width:50%"});
+          row.push(bi,h("datalist",{id:"tbox"},state.boxes.map(function(b){return h("option",{value:b.name});})),
+            h("button",{class:"ghost",onclick:function(){
+              var bn=bi.value.trim(); if(!bn) return;
+              var cat=guessCategory(bn)||guessCategory(r.e.name)||"Sonstiges";
+              var it=addItem(r.e.name,r.b,bn,cat,"","");
+              r.e.itemId=it.id; addingEntryId=null; save(); render(); toast("✓ ins Lager aufgenommen: "+bn);
+            }},["OK"]));
+        } else row.push(h("button",{class:"ghost",onclick:function(){addingEntryId=r.e.id;render();}},["Ins Lager aufnehmen"]));
+      }
+      pc.appendChild(h("div",{class:"item"},row));
+    });
+  });
+  wrap.appendChild(pc);
+
+  /* Fehlt */
+  var missing=t.entries.filter(function(e){return e.qty>backOf(t,e);});
+  var mc=h("div",{class:"card"},[h("h3",null,["Es fehlt"])]);
+  if(!missing.length) mc.appendChild(h("div",{class:"ok"},["Nichts fehlt 🎉"]));
+  var txt=[];
+  missing.forEach(function(e){
+    var m=e.qty-backOf(t,e), it=e.itemId?itemById(e.itemId):null, bx=it?boxById(it.box):null;
+    txt.push("- "+m+"× "+e.name+(bx?" ("+bx.name+")":""));
+    mc.appendChild(h("div",{class:"item"},[h("div",{class:"n"},[m+"× "+e.name,bx?h("small",null,["gehört in 📦 "+bx.name]):null])]));
+  });
+  if(missing.length){
+    var acts=[h("button",{class:"ghost",onclick:function(){copyText(t.name+" – es fehlt:\n"+txt.join("\n"));}},["Fehlliste kopieren"])];
+    var linkedMiss=missing.some(function(e){return e.itemId&&itemById(e.itemId)&&e.qty-backOf(t,e)>(e.deducted||0);});
+    if(!ro&&linkedMiss) acts.push(h("button",{class:"ghost danger",onclick:function(){
+      if(confirmId==="deduct") deductMissing(t); else {confirmId="deduct";render();}
+    }},[confirmId==="deduct"?"Sicher? Bestand wird verringert":"Fehlende vom Lagerbestand abbuchen"]));
+    mc.appendChild(h("div",{class:"actions"},acts));
+  }
+  wrap.appendChild(mc);
+
+  wrap.appendChild(h("div",{class:"actions",style:"margin-top:8px"},ro?[
+    h("button",{class:"ghost",onclick:function(){t.status="back";save();render();}},["Wieder öffnen"])
+  ]:[
+    h("button",{class:"ghost",onclick:function(){t.status="pack";save();render();}},["← Packliste bearbeiten"]),
+    h("button",{class:"pri",onclick:function(){t.status="done";save();render();}},["Freizeit abschließen"])
+  ]));
+  return wrap;
+}
+
 function viewData(){
   var msg=h("div",{class:"mute",style:"margin-top:8px"});
   var file=h("input",{type:"file",accept:".json,application/json",style:"display:none",onchange:function(e){
@@ -555,7 +973,7 @@ function viewData(){
       try{
         var d=JSON.parse(r.result);
         if(!d||!Array.isArray(d.boxes)||!Array.isArray(d.items)) throw 0;
-        state=migrate({boxes:d.boxes,items:d.items,updated:0}); save(); render(); toast("Backup eingespielt");
+        state=migrate({boxes:d.boxes,items:d.items,trips:d.trips,alias:d.alias,updated:0}); save(); render(); toast("Backup eingespielt");
       }catch(x){msg.textContent="Datei nicht lesbar.";}
     };
     r.readAsText(f);
@@ -579,16 +997,16 @@ function viewData(){
     msg
   ]);
 }
-var TABS=[["add","➕ Einlagern"],["kisten","📦 Kisten"],["kategorien","🏷️ Kategorien"],["suche","🔍 Suche"],["daten","💾 Daten"]];
+var TABS=[["add","➕ Einlagern"],["kisten","📦 Kisten"],["kategorien","🏷️ Kategorien"],["suche","🔍 Suche"],["freizeit","🏕️ Freizeit"],["daten","💾 Daten"]];
 function render(){
   var nav=document.getElementById("tabs"); nav.innerHTML="";
   TABS.forEach(function(t){
-    nav.appendChild(h("button",{class:tab===t[0]?"on":"",onclick:function(){tab=t[0];confirmId=null;location.hash=t[0];render();}},[t[1]]));
+    nav.appendChild(h("button",{class:tab===t[0]?"on":"",onclick:function(){tab=t[0];confirmId=null;addingEntryId=null;location.hash=t[0];render();}},[t[1]]));
   });
   var total=state.items.reduce(function(s,i){return s+i.qty;},0);
   document.getElementById("stats").textContent=state.boxes.length+" Kisten · "+state.items.length+" Artikel · "+total+" Stück";
   var app=document.getElementById("app"); app.innerHTML="";
-  app.appendChild(tab==="add"?viewAdd():tab==="kisten"?viewBoxes():tab==="kategorien"?viewCats():tab==="daten"?viewData():viewSearch());
+  app.appendChild(tab==="add"?viewAdd():tab==="kisten"?viewBoxes():tab==="kategorien"?viewCats():tab==="daten"?viewData():tab==="freizeit"?viewTrips():viewSearch());
 }
 window.addEventListener("hashchange",function(){
   var t=(location.hash||"#add").slice(1);
