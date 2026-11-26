@@ -1561,9 +1561,9 @@ function loginUser(first,last,pw){
   if(!em) return Promise.reject({message:"Bitte Vor- und Nachnamen angeben."});
   return FB.auth.signInWithEmailAndPassword(em,pw).then(function(c){cloud.name=c.user.displayName||cloud.name;});
 }
-function createStamm(name,withData){
+function createStamm(name,withData,myRole){
   var ref=FB.db.collection("staemme").doc(),uid=cloud.user.uid,names={},members={},sid=ref.id;
-  names[uid]=cloud.name;members[uid]={role:"leitung"};
+  names[uid]=cloud.name;members[uid]={role:myRole==="wart"?"wart":"leitung"};
   var data=withData?stripState(state):blankState();
   return ref.set({name:name,owner:uid,inviteCode:randCode(12),members:members,memberIds:[uid],names:names,created:FB.V.serverTimestamp()}).then(function(){
     return ref.collection("data").doc("state").set({json:JSON.stringify(data),rev:1,by:uid,byName:cloud.name,at:FB.V.serverTimestamp()});
@@ -1645,13 +1645,15 @@ function viewStamm(){
 
   var nameIn=h("input",{placeholder:"Name des Stamms",required:true});
   var up=h("input",{type:"checkbox",checked:true});
+  var roleSel=h("select",null,[h("option",{value:"leitung"},["Stammesleitung"]),h("option",{value:"wart"},["Materialwart"])]);
   var cf=h("form",{class:"add"},[h("div",null,[h("label",null,["Neuen Stamm gründen"]),nameIn]),
+    h("div",null,[h("label",null,["Meine Rolle in diesem Stamm"]),roleSel]),
     h("label",{style:"display:flex;gap:8px;align-items:center;color:var(--ink)"},[up,"Aktuelle Lagerdaten dieses Geräts hochladen"]),
     h("button",{class:"pri",type:"submit"},["Stamm gründen"])]);
   cf.addEventListener("submit",function(ev){
     ev.preventDefault();if(!nameIn.value.trim()) return;
     var withData=cloud.sid?false:up.checked;
-    createStamm(nameIn.value.trim(),withData).then(function(sid){toast("Stamm gegründet");activate(sid);render();},function(e){cloud.err="Stamm konnte nicht gegründet werden: "+((e&&e.code)||"");safeRender();});
+    createStamm(nameIn.value.trim(),withData,roleSel.value).then(function(sid){toast("Stamm gegründet");activate(sid);render();},function(e){cloud.err="Stamm konnte nicht gegründet werden: "+((e&&e.code)||"");safeRender();});
   });
   wrap.appendChild(h("div",{class:"card"},[cf]));
 
@@ -1704,10 +1706,12 @@ function viewActiveStamm(){
     var label=((st.names||{})[uid]||"?")+(self?" (du)":"")+(isOwner?" · Ersteller":"");
     var small=active?"✏️ Bearbeiten erlaubt bis "+fmtUntil(m.editUntil):"";
     var right=[];
-    if(mgr&&!isOwner&&!self){
-      var sel=h("select",{style:"max-width:150px"},["leitung","wart","beobachter"].map(function(r){return h("option",{value:r,selected:r===role},[ROLE_LBL[r]]);}));
+    if(mgr&&(self||!isOwner)){
+      var opts=self?["leitung","wart"]:["leitung","wart","beobachter"];
+      var sel=h("select",{style:"max-width:150px"},opts.map(function(r){return h("option",{value:r,selected:r===role},[ROLE_LBL[r]]);}));
       sel.addEventListener("change",function(){setMemberRole(uid,sel.value);});
-      right.push(sel,h("button",{class:"ghost danger",onclick:function(){if(confirmId==="rm"+uid){confirmId=null;removeMember(uid);}else{confirmId="rm"+uid;render();}}},[confirmId==="rm"+uid?"Sicher?":"✕"]));
+      right.push(sel);
+      if(!self) right.push(h("button",{class:"ghost danger",onclick:function(){if(confirmId==="rm"+uid){confirmId=null;removeMember(uid);}else{confirmId="rm"+uid;render();}}},[confirmId==="rm"+uid?"Sicher?":"✕"]));
     } else right.push(h("span",{class:"mute"},[ROLE_LBL[role]||role]));
     var row=h("div",{class:"item",style:"flex-wrap:wrap"},[h("div",{class:"n"},[label,small?h("small",null,[small]):null])].concat(right));
     if(mgr&&role==="beobachter"&&!isOwner){

@@ -17,7 +17,7 @@ Danach erscheint im Tab **👥 Stamm** die Anmeldung. Der erste Nutzer registrie
 ## Rollen
 - **Stammesleitung** und **Materialwart**: gleiche Rechte. Sie bearbeiten das Material (hinzufügen, ändern, löschen), geben Beitrittsanfragen frei, legen Rollen fest und erlauben Beobachtern befristet das Bearbeiten.
 - **Beobachter**: sehen alles live, ändern aber nichts. Mit einer befristeten Erlaubnis (1 Stunde bis 7 Tage) können sie bearbeiten, danach wieder nur lesen.
-- Der **Ersteller** des Stamms kann von niemandem herabgestuft oder entfernt werden.
+- Der **Ersteller** wählt beim Gründen, ob er Stammesleitung oder Materialwart ist. Jeder mit diesen beiden Rollen kann seine eigene Rolle zwischen beiden wechseln und die Rollen der anderen ändern. Nur der Ersteller kann von anderen nicht herabgestuft oder entfernt werden.
 
 ## Gut zu wissen
 - Als Benutzername dient „Vorname Nachname“ (intern wird daraus eine technische Adresse gebildet). Zwei Personen mit gleichem Namen brauchen eine kleine Unterscheidung im Nachnamen (z. B. „Müller2“).

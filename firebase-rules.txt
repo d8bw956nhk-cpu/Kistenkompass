@@ -20,18 +20,25 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.owner == request.auth.uid
         && request.resource.data.memberIds == [request.auth.uid]
-        && request.resource.data.members[request.auth.uid].role == 'leitung';
+        && (request.resource.data.members[request.auth.uid].role == 'leitung'
+            || request.resource.data.members[request.auth.uid].role == 'wart');
 
       allow read: if signedIn() && (request.auth.uid in resource.data.memberIds);
 
       allow update: if signedIn() && (
-        // Stammesleitung / Materialwart verwalten Rollen, der Ersteller bleibt unverändert
+        // Stammesleitung / Materialwart verwalten Rollen (auch die eigene).
+        // Eigene Rolle und die des Erstellers bleiben immer Stammesleitung oder Materialwart.
         ( (request.auth.uid in resource.data.members)
           && (resource.data.members[request.auth.uid].role == 'leitung'
               || resource.data.members[request.auth.uid].role == 'wart')
           && request.resource.data.owner == resource.data.owner
-          && request.resource.data.members[resource.data.owner] == resource.data.members[resource.data.owner]
-          && (resource.data.owner in request.resource.data.memberIds) )
+          && (resource.data.owner in request.resource.data.memberIds)
+          && (request.resource.data.members[request.auth.uid].role == 'leitung'
+              || request.resource.data.members[request.auth.uid].role == 'wart')
+          && (request.resource.data.members[resource.data.owner].role == 'leitung'
+              || request.resource.data.members[resource.data.owner].role == 'wart')
+          && (request.auth.uid == resource.data.owner
+              || request.resource.data.members[resource.data.owner] == resource.data.members[resource.data.owner]) )
         ||
         // Jedes Mitglied (außer dem Ersteller) darf sich selbst entfernen
         ( (request.auth.uid in resource.data.memberIds)
