@@ -16,7 +16,7 @@
 :root{--bg:#f6f5f1;--card:#fff;--ink:#1d1d1b;--mute:#6b6a64;--line:#e3e1d9;--acc:#c2410c;--acc2:#fff3ea;--ok:#15803d;--bad:#b91c1c}
 @media (prefers-color-scheme:dark){:root{--bg:#161614;--card:#211f1d;--ink:#f1efe8;--mute:#a09d92;--line:#35332e;--acc:#fb923c;--acc2:#2c2118;--ok:#4ade80;--bad:#f87171}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) 96px env(safe-area-inset-left)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:env(safe-area-inset-top) env(safe-area-inset-right) 112px env(safe-area-inset-left)}
 header{position:sticky;top:0;z-index:6;background:var(--bg);padding:10px 14px 8px;max-width:760px;margin:auto;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
 h1{font-size:19px;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sub{color:var(--mute);font-size:14px}
@@ -106,6 +106,43 @@ textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius
 input[type=checkbox]{width:22px;height:22px;flex:none;padding:0;accent-color:var(--acc)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .hit{background:var(--acc2)}
+
+/* ---------- Layout-Korrekturen ---------- */
+button{max-width:100%;box-sizing:border-box}
+.seg-row{flex-wrap:wrap}
+.seg{max-width:100%}
+.seg-row .seg{flex:1 1 auto}
+.seg button{white-space:nowrap;flex:1 0 auto;min-width:0;font-size:13.5px}
+.seg-row>button.ghost{white-space:nowrap;flex:none}
+.actions>button{flex:1 1 auto;white-space:normal;text-align:center}
+.fold-h .fh-t{min-width:0}
+.card,.fold-b,.item .n{min-width:0}
+/* ---------- Liquid-Bewegung (ohne Glas) ---------- */
+:root{--spring:cubic-bezier(.34,1.56,.64,1)}
+button,.fab,.swatch,.emo-b{transition:transform .38s var(--spring),background-color .2s,box-shadow .25s,border-color .2s;-webkit-tap-highlight-color:transparent}
+button:active:not(:disabled){transform:scale(.94)}
+.fold-h:active:not(:disabled){transform:scale(.985)}
+.fab:active{transform:scale(.88) rotate(90deg)}
+.fab{box-shadow:0 6px 16px rgba(0,0,0,.18)}
+button.pri{box-shadow:0 4px 12px color-mix(in srgb,var(--acc) 30%,transparent)}
+.tabs{left:50%;right:auto;transform:translateX(-50%);width:calc(100% - 24px);max-width:520px;bottom:calc(10px + env(safe-area-inset-bottom));padding:6px;border:1px solid var(--line);border-radius:30px;box-shadow:0 10px 28px rgba(0,0,0,.16);gap:0}
+.tabs button{position:relative;z-index:1;background:none!important}
+.tabs button.on{background:none!important}
+.tabs button .ti{transition:transform .45s var(--spring)}
+.tabs button.on .ti{transform:translateY(-1px) scale(1.15)}
+.tabs .pill{position:absolute;z-index:0;top:6px;bottom:6px;left:0;width:0;border-radius:24px;background:var(--acc2);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--acc) 22%,transparent);transition:left .5s var(--spring),width .5s var(--spring)}
+.toast{bottom:104px;animation:toastIn .5s var(--spring)}
+@keyframes toastIn{from{opacity:0;transform:translate(-50%,24px) scale(.85)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
+@keyframes unfold{from{opacity:0;transform:translateY(-10px) scaleY(.9)}to{opacity:1;transform:none}}
+@keyframes pop{0%{transform:scale(.82)}60%{transform:scale(1.07)}100%{transform:scale(1)}}
+@keyframes rise{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes chev{from{transform:rotate(0)}to{transform:rotate(90deg)}}
+body.anim .fold-b,body.anim form.add,body.anim .warnbox{animation:unfold .5s var(--spring) both;transform-origin:top center}
+body.anim .fold.open>.fold-h .chev{animation:chev .45s var(--spring) both}
+body.anim .seg button.on,body.anim .swatch.on,body.anim .emo-b.on,body.anim .ib.on{animation:pop .45s var(--spring)}
+body.page main>*{animation:rise .5s var(--spring) both}
+body.page main>*:nth-child(2){animation-delay:.04s}body.page main>*:nth-child(3){animation-delay:.08s}body.page main>*:nth-child(n+4){animation-delay:.12s}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
@@ -1078,25 +1115,36 @@ function htmlSheet(sh){
   });
   return {html:html+"</table>",tsv:tsv.join("\n")};
 }
-var sheetsTxt="";
-function toGoogleSheets(sh){
-  var o=htmlSheet(sh),done=false;
-  sheetsTxt=o.tsv;
-  try{window.open("https://docs.google.com/spreadsheets/create","_blank");}catch(e){}
-  function ok(){if(done)return;done=true;toast("Kopiert – in der neuen Google-Tabelle auf A1 tippen und „Einfügen“ wählen");}
-  function plain(){
-    try{navigator.clipboard.writeText(o.tsv).then(ok,function(){manual();});}catch(e){manual();}
-  }
-  function manual(){toast("Automatisches Kopieren nicht möglich – Text unter dem Export-Knopf kopieren");render();}
+var lastSheets=null,XLSX_MIME="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",sheetsNote="";
+function copySheetsClip(sh){
+  var o=htmlSheet(sh);
+  function ok(){toast("Kopiert – in Google Sheets auf Zelle A1 tippen und „Einfügen“ wählen");}
+  function plain(){try{navigator.clipboard.writeText(o.tsv).then(ok,function(){toast("Kopieren nicht möglich");});}catch(e){toast("Kopieren nicht möglich");}}
   try{
-    if(window.ClipboardItem&&navigator.clipboard&&navigator.clipboard.write){
+    if(window.ClipboardItem&&navigator.clipboard&&navigator.clipboard.write)
       navigator.clipboard.write([new ClipboardItem({"text/html":new Blob(['<meta charset="utf-8">'+o.html],{type:"text/html"}),"text/plain":new Blob([o.tsv],{type:"text/plain"})})]).then(ok,plain);
-    } else plain();
+    else plain();
   }catch(e){plain();}
 }
+function toGoogleSheets(sheets,fname){
+  var bytes=xlsxZip(sheets),file=null;
+  try{file=new File([bytes],fname+".xlsx",{type:XLSX_MIME});}catch(e){}
+  if(file&&navigator.canShare&&navigator.share&&navigator.canShare({files:[file]})){
+    navigator.share({files:[file],title:fname}).then(function(){sheetsNote="";},function(e){
+      if(e&&e.name==="AbortError")return;
+      downloadBytes(bytes,fname+".xlsx");sheetsNote="Teilen nicht möglich – Datei wurde heruntergeladen. In Google Sheets: Datei → Importieren → Hochladen.";render();
+    });
+    sheetsNote="Im Teilen-Menü „Sheets“ wählen. Taucht es nicht auf: „Mehr“ → Sheets aktivieren.";render();
+    return;
+  }
+  downloadBytes(bytes,fname+".xlsx");
+  sheetsNote="Datei heruntergeladen. In Google Sheets (sheets.google.com): Datei → Importieren → Hochladen und die .xlsx wählen. Oder unten als Text kopieren und in eine leere Tabelle einfügen.";
+  toast("Datei heruntergeladen – jetzt in Google Sheets importieren");render();
+}
 function deliverSheets(sheets,fname,label){
+  lastSheets=sheets[0];
   try{
-    if(prefs.fmt==="gsheets") toGoogleSheets(sheets[0]);
+    if(prefs.fmt==="gsheets") toGoogleSheets(sheets,fname);
     else{downloadBytes(xlsxZip(sheets),fname+".xlsx");toast(label+" als Excel erstellt");}
   }catch(e){toast("Export fehlgeschlagen");}
 }
@@ -1110,13 +1158,12 @@ function exportInv(){
   deliverSheets(sheetsInv(hh),"inventur-"+new Date(hh.at).toISOString().slice(0,10),"Inventurbericht");
 }
 function fmtPicker(){
-  function b(v,l){return h("button",{type:"button",class:prefs.fmt===v?"on":"",onclick:function(){prefs.fmt=v;savePrefs();render();}},[l]);}
-  var kids=[h("div",{class:"seg",style:"align-self:flex-start"},[b("xlsx","📊 Excel"),b("gsheets","🟩 Google Sheets")])];
-  kids.push(h("div",{class:"mute",style:"margin-top:6px"},[prefs.fmt==="gsheets"?"Öffnet eine neue Google-Tabelle. Die Daten (mit Farben) landen in der Zwischenablage, dort einmal „Einfügen“ tippen. Ein Google-Konto ist nötig.":"Lädt eine .xlsx-Datei herunter (öffnet auch in Numbers und Google Sheets)."]));
-  if(prefs.fmt==="gsheets"&&sheetsTxt){
-    var ta=h("textarea",{readonly:true,style:"margin-top:8px;min-height:70px",onclick:function(e){e.target.select();}});ta.value=sheetsTxt;
-    kids.push(h("details",{style:"margin-top:6px"},[h("summary",{class:"mute"},["Text zum manuellen Kopieren"]),ta]));
-  }
+  function b(v,l){return h("button",{type:"button",class:prefs.fmt===v?"on":"",onclick:function(){prefs.fmt=v;savePrefs();sheetsNote="";render();}},[l]);}
+  var g=prefs.fmt==="gsheets";
+  var kids=[h("div",{class:"seg sm"},[b("xlsx","📊 Excel"),b("gsheets","🟩 Google Sheets")])];
+  kids.push(h("div",{class:"mute",style:"margin-top:6px"},[g?"Auf dem iPad öffnet sich das Teilen-Menü: dort „Sheets“ wählen (Google-Sheets-App muss installiert sein). Am Computer wird eine Datei zum Import geladen.":"Lädt eine .xlsx-Datei herunter (öffnet auch in Numbers und Google Sheets)."]));
+  if(g&&sheetsNote) kids.push(h("div",{class:"warnbox"},[sheetsNote]));
+  if(g&&lastSheets) kids.push(h("div",{class:"actions"},[h("button",{class:"ghost",onclick:function(){copySheetsClip(lastSheets);}},["📋 Letzten Export als Text kopieren"])]));
   return h("div",null,kids);
 }
 /*XLSX-END*/
@@ -2428,14 +2475,34 @@ function viewMehr(){
 }
 var TABS=[["lager","📦","Lager"],["freizeit","🏕️","Freizeit"],["stamm","👥","Stamm"],["mehr","⚙️","Mehr"]];
 function visibleTabs(){return TABS.filter(function(t){return !(t[0]==="freizeit"&&prefs.hideTrips)&&!(t[0]==="stamm"&&prefs.hideStamm);});}
-function go(t){tab=normTab(t);confirmId=null;addingEntryId=null;location.hash=tab;render();}
+var flashT=null,pageT=null;
+function flash(){document.body.classList.add("anim");clearTimeout(flashT);flashT=setTimeout(function(){document.body.classList.remove("anim");},560);}
+function movePill(stretch){
+  var nav=document.getElementById("tabs"),pill=nav&&nav.querySelector(".pill"),on=nav&&nav.querySelector("button.on");
+  if(!pill||!on)return;
+  var l=on.offsetLeft,w=on.offsetWidth,l0=parseFloat(pill.getAttribute("data-l")),w0=parseFloat(pill.getAttribute("data-w"));
+  if(l===l0&&w===w0)return;
+  pill.setAttribute("data-l",l);pill.setAttribute("data-w",w);
+  function set(a,b){pill.style.left=a+"px";pill.style.width=b+"px";}
+  if(isNaN(l0)||!w0||stretch===false&&isNaN(l0)){pill.style.transition="none";set(l,w);void pill.offsetWidth;pill.style.transition="";return;}
+  var L=Math.min(l0,l),R=Math.max(l0+w0,l+w);
+  pill.style.transition="left .15s ease-out,width .15s ease-out";set(L,R-L);
+  setTimeout(function(){pill.style.transition="";set(l,w);},140);
+}
+window.addEventListener("resize",function(){var p=document.querySelector("#tabs .pill");if(p){p.setAttribute("data-l","");p.setAttribute("data-w","");}movePill(false);});
+document.addEventListener("click",function(e){if(e.target.closest&&e.target.closest("button,summary,label"))flash();},true);
+function go(t){document.body.classList.add("page");clearTimeout(pageT);pageT=setTimeout(function(){document.body.classList.remove("page");},700);tab=normTab(t);confirmId=null;addingEntryId=null;location.hash=tab;render();}
 function render(){
   document.body.classList.toggle("compact",!!prefs.compact);applyTheme();
   if(!visibleTabs().some(function(t){return t[0]===tab;})&&tab!=="mehr") tab="lager";
-  var nav=document.getElementById("tabs"); nav.innerHTML="";
-  visibleTabs().forEach(function(t){
-    nav.appendChild(h("button",{class:tab===t[0]?"on":"",onclick:function(){go(t[0]);}},[h("span",{class:"ti"},[t[1]]),h("span",null,[t[2]])]));
-  });
+  var nav=document.getElementById("tabs"),vt=visibleTabs(),navKey=vt.map(function(t){return t[0];}).join();
+  if(nav.getAttribute("data-key")!==navKey){
+    nav.innerHTML="";nav.setAttribute("data-key",navKey);
+    nav.appendChild(h("span",{class:"pill"}));
+    vt.forEach(function(t){nav.appendChild(h("button",{"data-t":t[0],onclick:function(){go(t[0]);}},[h("span",{class:"ti"},[t[1]]),h("span",null,[t[2]])]));});
+  }
+  Array.prototype.forEach.call(nav.querySelectorAll("button"),function(b){b.classList.toggle("on",b.getAttribute("data-t")===tab);});
+  movePill(false);
   var hd=document.getElementById("hd");hd.innerHTML="";
   hd.appendChild(h("div",{style:"flex:1;min-width:0"},[h("h1",null,[cloud.sid&&cloud.stamm?cloud.stamm.name:"Lager-Organizer"]),h("div",{class:"sub",id:"stats"})]));
   if(cloud.sid&&cloud.stamm) hd.insertBefore(iconNode(cloud.stamm.icon,40,"👥"),hd.firstChild);
