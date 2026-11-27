@@ -45,6 +45,9 @@ main{max-width:760px;margin:auto;padding:0 12px}
 .fold.open .chev{transform:rotate(90deg)}
 .fold-b{padding:0 12px 12px;border-top:1px solid var(--line)}
 .hitrow{cursor:pointer}
+.swatch{width:36px;height:36px;border-radius:50%;border:3px solid transparent;cursor:pointer;outline:1px solid var(--line)}
+.swatch.on{border-color:var(--ink)}
+.cinp{width:48px;height:36px;padding:2px}
 .emo{display:flex;flex-wrap:wrap;gap:6px}
 .emo-b{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--bg);font-size:22px;cursor:pointer}
 .emo-b.on{border-color:var(--acc);background:var(--acc2)}
@@ -302,8 +305,9 @@ var PREF_KEY="lager-prefs",PHOTO_KEY="lager-photo";
 var prefs=loadPrefs();
 function loadPrefs(){
   var p={};try{p=JSON.parse(localStorage.getItem(PREF_KEY)||"{}")||{};}catch(e){}
-  return {hideTrips:!!p.hideTrips,hideStamm:!!p.hideStamm,compact:!!p.compact,expand:!!p.expand};
+  return {hideTrips:!!p.hideTrips,hideStamm:!!p.hideStamm,compact:!!p.compact,expand:!!p.expand,acc:okCol(p.acc)?p.acc:"",tint:!!p.tint,open:(p.open&&typeof p.open==="object")?p.open:{}};
 }
+function okCol(c){return typeof c==="string"&&/^#[0-9a-fA-F]{6}$/.test(c);}
 function savePrefs(){try{localStorage.setItem(PREF_KEY,JSON.stringify(prefs));}catch(e){}}
 function localPhoto(){try{return localStorage.getItem(PHOTO_KEY)||"";}catch(e){return "";}}
 function okImg(u){return typeof u==="string"&&u.length<200000&&/^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+\/=]+$/.test(u);}
@@ -378,6 +382,80 @@ function iconPicker(cur,onPick){
   }
   draw();wrap.appendChild(grid);wrap.appendChild(prev);
   return wrap;
+}
+
+
+/* ---------- Einklappbare Karten & Farben ---------- */
+function collCard(key,title,body,defOpen){
+  var open=key in prefs.open?prefs.open[key]:!!defOpen;
+  var card=h("div",{class:"card fold"+(open?" open":"")});
+  card.appendChild(h("button",{class:"fold-h",type:"button","aria-expanded":open?"true":"false",onclick:function(){prefs.open[key]=!open;savePrefs();render();}},[
+    h("span",{class:"chev"},["▸"]),h("span",{class:"fh-t"},[h("b",null,[title])])]));
+  if(open) card.appendChild(h("div",{class:"fold-b",style:"padding-top:10px"},[body]));
+  return card;
+}
+var SWATCHES=["#c2410c","#b91c1c","#be185d","#7e22ce","#4338ca","#0369a1","#0f766e","#15803d","#4d7c0f","#a16207","#57534e","#1d4ed8"];
+function stammTheme(){var t=cloud.sid&&cloud.stamm&&cloud.stamm.theme;return (t&&okCol(t.acc))?t:null;}
+function applyTheme(){
+  var r=document.documentElement.style,t=stammTheme();
+  var acc=prefs.acc||(t&&t.acc)||"",tint=prefs.acc?prefs.tint:!!(t&&t.tint);
+  if(acc){r.setProperty("--acc",acc);r.setProperty("--acc2","color-mix(in srgb,"+acc+" 14%,var(--card))");}
+  else{r.removeProperty("--acc");r.removeProperty("--acc2");}
+  if(acc&&tint) r.setProperty("--bg","color-mix(in srgb,"+acc+" 9%,var(--card))"); else r.removeProperty("--bg");
+}
+function colorPicker(cur,tint,onChange){
+  var wrap=h("div"),sw=h("div",{class:"emo"});
+  function fire(c,t){onChange(c,t);}
+  SWATCHES.forEach(function(c){sw.appendChild(h("button",{type:"button","aria-label":c,class:"swatch"+(cur===c?" on":""),style:"background:"+c,onclick:function(){fire(c,tint);}}));});
+  var ci=h("input",{type:"color",value:okCol(cur)?cur:"#c2410c",class:"cinp"});
+  ci.addEventListener("change",function(){fire(ci.value,tint);});
+  var tb=h("input",{type:"checkbox"});tb.checked=!!tint;
+  tb.addEventListener("change",function(){fire(cur,tb.checked);});
+  wrap.appendChild(sw);
+  wrap.appendChild(h("div",{style:"display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap"},[h("span",{class:"mute"},["Eigene Farbe:"]),ci,
+    h("button",{type:"button",class:"ghost",onclick:function(){fire("",false);}},["Zurücksetzen"])]));
+  wrap.appendChild(h("label",{class:"trow",style:"border-top:0"},[tb,h("span",null,["Hintergrund leicht einfärben"])]));
+  return wrap;
+}
+function stammColorCard(){
+  var t=stammTheme()||{};
+  return collCard("stammcolor","🎨 Stammesfarbe (für alle Mitglieder)",h("div",null,[
+    h("div",{class:"mute",style:"margin-bottom:8px"},["Gilt für alle im Stamm, außer sie wählen unter „Mehr“ eine eigene Farbe."]),
+    colorPicker(t.acc||"",!!t.tint,function(c,tn){
+      var up=c?{theme:{acc:c,tint:!!tn}}:{theme:FB.V.delete()};
+      stammRef().update(up).then(function(){toast(c?"Stammesfarbe gespeichert":"Farbe zurückgesetzt");},function(e){toast(failMsg(e));});
+    })]),false);
+}
+function feedbackCard(){
+  var mail=(window.FEEDBACK_EMAIL||"").trim();
+  var kind=h("select",null,["💡 Verbesserungsvorschlag","🐞 Fehler melden","💬 Sonstiges"].map(function(x){return h("option",{value:x},[x]);}));
+  var ta=h("textarea",{placeholder:"Was sollen wir verbessern?"});
+  var body=h("div",null,[h("div",{class:"mute",style:"margin-bottom:8px"},["Dein Vorschlag geht per E-Mail direkt an den Entwickler der App."]),kind,h("div",{style:"height:8px"}),ta]);
+  if(!mail) body.appendChild(h("div",{class:"warn",style:"margin-top:8px"},["Noch keine E-Mail-Adresse hinterlegt (FEEDBACK_EMAIL in firebase-config.js)."]));
+  body.appendChild(h("div",{class:"actions"},[h("button",{class:"pri",onclick:function(){
+    if(!mail){toast("Keine Empfängeradresse eingestellt");return;}
+    if(!ta.value.trim()){toast("Bitte erst etwas schreiben");return;}
+    var txt=ta.value.trim()+"\n\n— "+(cloud.user?cloud.name:"anonym")+(cloud.stamm?" · Stamm "+cloud.stamm.name:"")+" · Lager-Organizer";
+    location.href="mailto:"+mail+"?subject="+encodeURIComponent(kind.value.replace(/^\S+\s/,"")+" – Lager-Organizer")+"&body="+encodeURIComponent(txt);
+  }},["✉️ E-Mail verfassen"])]));
+  return collCard("feedback","✉️ Verbesserungsvorschlag",body,false);
+}
+function deleteStamm(){
+  var sid=cloud.sid,ref=stammRef(sid);
+  deactivate(true);
+  return Promise.all([ref.collection("data").get(),ref.collection("log").get(),ref.collection("joinRequests").get()]).then(function(r){
+    var ps=[];r.forEach(function(qs){qs.docs.forEach(function(d){ps.push(d.ref.delete());});});return Promise.all(ps);
+  }).then(function(){return ref.delete();}).then(function(){toast("Stamm gelöscht");},function(e){toast(failMsg(e));activate(sid);});
+}
+function leaveStamm(){
+  var st=cloud.stamm,me=cloud.user.uid,up={};
+  up["members."+me]=FB.V.delete();up["names."+me]=FB.V.delete();up.memberIds=FB.V.arrayRemove(me);
+  if(st.owner===me){
+    var next=Object.keys(st.members).filter(function(u){return u!==me&&isMgrRole(st.members[u].role);})[0];
+    if(!next){toast("Du bist der einzige Verwalter. Ernenne zuerst jemand anderen zu Stammesleitung/Materialwart oder lösche den Stamm.");return Promise.resolve();}
+    up.owner=next;
+  }
+  return stammRef().update(up).then(function(){toast("Stamm verlassen");},function(e){toast(failMsg(e));});
 }
 
 /* ---------- Lager ---------- */
@@ -1789,12 +1867,12 @@ function viewStamm(){
     var withData=cloud.sid?false:up.checked;
     createStamm(nameIn.value.trim(),withData,roleSel.value,newIcon).then(function(sid){toast("Stamm gegründet");activate(sid);render();},function(e){cloud.err="Stamm konnte nicht gegründet werden: "+((e&&e.code)||"");safeRender();});
   });
-  wrap.appendChild(h("div",{class:"card"},[cf]));
+  wrap.appendChild(collCard("create","➕ Neuen Stamm gründen",cf,!cloud.stamme.length));
 
   var jIn=h("input",{placeholder:"Einladungslink einfügen"});
   var jf=h("form",{class:"add"},[h("div",null,[h("label",null,["Stamm beitreten"]),jIn,h("div",{class:"mute"},["Oder den QR-Code des Stamms scannen."])]),h("button",{class:"ghost",type:"submit"},["Weiter"])]);
   jf.addEventListener("submit",function(ev){ev.preventDefault();var p2=parseJoin(jIn.value);if(!p2){toast("Link nicht erkannt");return;}cloud.pending=p2;render();});
-  wrap.appendChild(h("div",{class:"card"},[jf]));
+  wrap.appendChild(collCard("join","🔗 Stamm beitreten",jf,!cloud.stamme.length));
 
   if(cloud.sid) wrap.appendChild(viewActiveStamm());
   return wrap;
@@ -1888,18 +1966,26 @@ function viewActiveStamm(){
     }
     c.appendChild(ic);
   }
-  var lc=h("div",{class:"card"},[h("h3",null,["Änderungsverlauf"])]);
+  var lc=h("div");
   if(!cloud.log.length) lc.appendChild(h("div",{class:"mute"},["Noch keine Änderungen."]));
   cloud.log.forEach(function(l){
     var t=l.at&&l.at.toDate?l.at.toDate():(typeof l.at==="number"?new Date(l.at):null);
     var ts=t?t.toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"…";
     lc.appendChild(h("div",{class:"item"},[h("div",{class:"n"},[l.text||"",h("small",null,[(l.name||"?")+" · "+ts])])]));
   });
-  c.appendChild(lc);
-  if(st.owner!==me) c.appendChild(h("button",{class:"ghost danger",onclick:function(){
-    if(confirmId==="leave"){confirmId=null;removeMember(me).then(function(){toast("Stamm verlassen");});}
-    else{confirmId="leave";render();}
-  }},[confirmId==="leave"?"Sicher? Stamm verlassen":"Stamm verlassen"]));
+  c.appendChild(collCard("log","🕘 Änderungsverlauf",lc,false));
+  if(mgr) c.appendChild(stammColorCard());
+  var dz=h("div"),isLeitung=cloud.role==="leitung";
+  dz.appendChild(h("button",{class:"ghost danger",style:"width:100%;margin-bottom:8px",onclick:function(){
+    if(confirmId==="leave"){confirmId=null;leaveStamm();}else{confirmId="leave";render();}
+  }},[confirmId==="leave"?"Sicher? Jetzt verlassen":"🚪 Stamm verlassen"]));
+  if(isLeitung){
+    dz.appendChild(h("button",{class:"ghost danger",style:"width:100%",onclick:function(){
+      if(confirmId==="delst"){confirmId=null;deleteStamm();}else{confirmId="delst";render();}
+    }},[confirmId==="delst"?"Sicher? Stamm + alle Daten endgültig löschen":"🗑️ Stamm löschen (Stammesleitung)"]));
+    dz.appendChild(h("div",{class:"mute",style:"margin-top:6px"},["Löscht den Stamm samt Lagerdaten für alle Mitglieder. Das lässt sich nicht rückgängig machen."]));
+  } else dz.appendChild(h("div",{class:"mute"},["Nur die Stammesleitung kann den Stamm löschen."]));
+  c.appendChild(collCard("danger","⚠️ Verlassen & Löschen",dz,false));
   return c;
 }
 /*CLOUD-END*/
@@ -1918,7 +2004,7 @@ function dataCard(){
     };
     r.readAsText(f);
   }});
-  return h("div",{class:"card"},[
+  return h("div",null,[
     h("h2",null,["Excel-Export"]),
     h("div",{class:"mute"},["Alle Kisten mit Inhalt als .xlsx, nach Kategorien gruppiert (Material, Anzahl, Zugang, Anmerkung, Wo?)."]),
     h("div",{class:"actions"},[h("button",{class:"pri",onclick:exportExcel},["📊 Nach Excel exportieren"])]),
@@ -1949,7 +2035,7 @@ function viewMehr(){
     h("div",{class:"actions"},[h("button",{class:"pri",onclick:function(){pickImage(160,savePhoto);}},[myPhoto()?"📷 Bild ändern":"📷 Profilbild wählen"]),
       myPhoto()?h("button",{class:"ghost danger",onclick:function(){savePhoto("");}},["Entfernen"]):null])]);
   wrap.appendChild(pc);
-  var dc=h("div",{class:"card"},[h("h3",null,["Darstellung"]),
+  var dc=h("div",null,[
     toggleRow("hideTrips","Tab „Freizeit“ ausblenden","Spart Platz in der unteren Leiste"),
     toggleRow("hideStamm","Tab „Stamm“ ausblenden","Konto und Stamm bleiben hier unter „Mehr“ erreichbar"),
     toggleRow("compact","Kompakte Ansicht","Kleinere Abstände, mehr Inhalt pro Bildschirm"),
@@ -1958,15 +2044,19 @@ function viewMehr(){
   if(prefs.hideTrips) qa.push(h("button",{class:"ghost",onclick:function(){prefs.hideTrips=false;savePrefs();tab="freizeit";render();}},["🏕️ Freizeit einblenden"]));
   if(prefs.hideStamm) qa.push(h("button",{class:"ghost",onclick:function(){prefs.hideStamm=false;savePrefs();tab="stamm";render();}},["👥 Stamm einblenden"]));
   if(qa.length) dc.appendChild(h("div",{class:"actions"},qa));
-  wrap.appendChild(dc);
-  wrap.appendChild(dataCard());
+  wrap.appendChild(collCard("display","🎛️ Darstellung",dc,true));
+  var colb=h("div",null,[stammTheme()&&!prefs.acc?h("div",{class:"mute",style:"margin-bottom:8px"},["Aktuell gilt die Stammesfarbe. Wähle eine eigene Farbe, um sie nur für dich zu überschreiben."]):null,
+    colorPicker(prefs.acc,prefs.tint,function(c,t){prefs.acc=c;prefs.tint=t;savePrefs();render();})]);
+  wrap.appendChild(collCard("mycolor","🎨 Meine Farben",colb,false));
+  wrap.appendChild(collCard("data","💾 Export & Backup",dataCard(),false));
+  wrap.appendChild(feedbackCard());
   return wrap;
 }
 var TABS=[["lager","📦","Lager"],["freizeit","🏕️","Freizeit"],["stamm","👥","Stamm"],["mehr","⚙️","Mehr"]];
 function visibleTabs(){return TABS.filter(function(t){return !(t[0]==="freizeit"&&prefs.hideTrips)&&!(t[0]==="stamm"&&prefs.hideStamm);});}
 function go(t){tab=normTab(t);confirmId=null;addingEntryId=null;location.hash=tab;render();}
 function render(){
-  document.body.classList.toggle("compact",!!prefs.compact);
+  document.body.classList.toggle("compact",!!prefs.compact);applyTheme();
   if(!visibleTabs().some(function(t){return t[0]===tab;})&&tab!=="mehr") tab="lager";
   var nav=document.getElementById("tabs"); nav.innerHTML="";
   visibleTabs().forEach(function(t){

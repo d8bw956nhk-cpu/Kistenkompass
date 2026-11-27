@@ -28,3 +28,7 @@ Danach erscheint im Tab **👥 Stamm** die Anmeldung. Der erste Nutzer registrie
 ## Update: Profilbilder & Stamm-Symbole
 Die neue `firebase-rules.txt` enthält zusätzlich Regeln für Profilbilder. **Bitte erneut veröffentlichen** (Firestore → Regeln → alles ersetzen → Veröffentlichen). Ohne diesen Schritt werden Profilbilder, aber auch Rollenänderungen nicht gespeichert; die App zeigt dann eine Fehlermeldung.
 Accounts löschen oder wiederherstellen geht direkt in der Firebase-Konsole (Authentication → Users).
+
+## Update: Stamm verlassen/löschen, Farben, Vorschläge
+- **Regeln erneut veröffentlichen** (neue Regeln für Stamm löschen und Verlassen des Erstellers).
+- In `firebase-config.js` ganz unten bei `window.FEEDBACK_EMAIL` deine E-Mail-Adresse eintragen, sonst funktioniert der Vorschlags-Button nicht.
