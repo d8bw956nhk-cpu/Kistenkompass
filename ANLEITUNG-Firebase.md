@@ -24,3 +24,7 @@ Danach erscheint im Tab **👥 Stamm** die Anmeldung. Der erste Nutzer registrie
 - Es gibt keine „Passwort vergessen“-Funktion, weil keine echte E-Mail-Adresse hinterlegt ist. Im Firebase-Projekt (Authentication → Benutzer) kann ein Konto gelöscht werden, die Person registriert sich dann neu.
 - Die Konfigurationswerte in `firebase-config.js` sind nicht geheim. Geschützt sind die Daten durch die Regeln aus Schritt 5. Veröffentliche sie deshalb unbedingt.
 - Gleichzeitige Änderungen mehrerer Personen werden automatisch zusammengeführt. Ändern zwei Personen genau dasselbe Objekt, gewinnt die zuletzt gespeicherte Änderung.
+
+## Update: Profilbilder & Stamm-Symbole
+Die neue `firebase-rules.txt` enthält zusätzlich Regeln für Profilbilder. **Bitte erneut veröffentlichen** (Firestore → Regeln → alles ersetzen → Veröffentlichen). Ohne diesen Schritt werden Profilbilder, aber auch Rollenänderungen nicht gespeichert; die App zeigt dann eine Fehlermeldung.
+Accounts löschen oder wiederherstellen geht direkt in der Firebase-Konsole (Authentication → Users).

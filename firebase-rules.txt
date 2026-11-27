@@ -16,6 +16,15 @@ service cloud.firestore {
     }
     function canWrite(sid) { return isManager(sid) || hasTempEdit(sid); }
 
+    // Profilbilder: jeder Angemeldete darf lesen, schreiben nur das eigene Profil
+    match /profiles/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'photo'])
+        && request.resource.data.photo is string
+        && request.resource.data.photo.size() < 200000;
+    }
+
     match /staemme/{sid} {
       allow create: if signedIn()
         && request.resource.data.owner == request.auth.uid
