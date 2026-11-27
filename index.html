@@ -570,6 +570,10 @@ function setAllOpen(v){
   state.boxes.forEach(function(b){openBoxes[b.id]=v;});openBoxes["_loose"]=v;
   allCategories().forEach(function(c){openCats[c]=v;});
 }
+var draft={"f-qty":"1"};
+document.addEventListener("input",function(e){var t=e.target;if(t&&t.id&&t.id.indexOf("f-")===0&&t.id!=="f-q")draft[t.id]=t.value;},true);
+document.addEventListener("change",function(e){var t=e.target;if(t&&t.id&&t.id.indexOf("f-")===0&&t.id!=="f-q")draft[t.id]=t.value;},true);
+function draftDone(){draft["f-name"]="";draft["f-qty"]="1";draft["f-note"]="";}
 function addCard(){
   var loose=addLooseMode;
   var nameIn=h("input",{id:"f-name",placeholder:"z. B. Spülbürsten",autocomplete:"off",required:true});
@@ -581,6 +585,8 @@ function addCard(){
   var zugIn=h("input",{id:"f-zug",placeholder:"z. B. Bestand 2020",autocomplete:"off"});
   var noteIn=h("input",{id:"f-note",placeholder:"optional",autocomplete:"off"});
   var hint=h("div",{class:"mute"});
+  nameIn.value=draft["f-name"]||"";qtyIn.value=draft["f-qty"]||"1";boxIn.value=draft["f-box"]||"";posIn.value=draft["f-pos"]||"";zugIn.value=draft["f-zug"]||"";noteIn.value=draft["f-note"]||"";
+  if(draft["f-cat"]&&Array.prototype.some.call(catIn.options,function(o){return o.value===draft["f-cat"];})) catIn.value=draft["f-cat"];
   function updHint(){
     var b=boxByName(boxIn.value||"");
     if(b){hint.textContent="Kiste „"+b.name+"“ gehört zur Kategorie „"+b.cat+"“ – alles darin bekommt sie automatisch.";catIn.disabled=true;}
@@ -608,7 +614,7 @@ function addCard(){
       if(!name.trim()||!pos) return;
       var finishL=function(c){
         var it=addLooseItem(name,qty,pos,c,zug,note);
-        save();openBoxes["_loose"]=true;lagerMode="box";query="";
+        draftDone();save();openBoxes["_loose"]=true;lagerMode="box";query="";
         toast("✓ "+it.qty+"× "+it.name+" → 📍 "+pos+" ("+it.cat+")");
         render();
         setTimeout(function(){var n=document.getElementById("f-name");if(n)n.focus();var p=document.getElementById("f-pos");if(p)p.value=pos;},0);
@@ -623,7 +629,7 @@ function addCard(){
     if(!name.trim()||!boxName) return;
     function finish(c){
       var it=addItem(name,qty,boxName,c,zug,note);
-      save();
+      draftDone();save();
       var bx=boxByName(boxName);if(bx) openBoxes[bx.id]=true;
       lagerMode="box";query="";
       toast("✓ "+it.qty+"× "+it.name+" → "+boxName+" ("+it.cat+")");
@@ -1968,9 +1974,14 @@ function canEditNow(){
 }
 function blankState(){return {boxes:[],items:[],trips:[],alias:{},cats:[],invHist:[],inv:null};}
 function stripState(st){return JSON.parse(JSON.stringify({boxes:st.boxes,items:st.items,trips:st.trips||[],alias:st.alias||{},cats:st.cats||[],invHist:st.invHist||[],inv:st.inv||null}));}
-function safeRender(n){
+var srT=null;
+function safeRender(){
   var a=document.activeElement;
-  if(a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT")&&(n||0)<8){setTimeout(function(){safeRender((n||0)+1);},1000);return;}
+  /* Nie neu zeichnen, solange jemand tippt – sonst verschwindet die Eingabe */
+  if(a&&(a.tagName==="TEXTAREA"||a.tagName==="SELECT"||(a.tagName==="INPUT"&&a.type!=="checkbox"&&a.type!=="button"))){
+    if(!srT) srT=setTimeout(function(){srT=null;safeRender();},800);
+    return;
+  }
   render();
 }
 function loadScript(src){
@@ -2493,6 +2504,7 @@ window.addEventListener("resize",function(){var p=document.querySelector("#tabs 
 document.addEventListener("click",function(e){if(e.target.closest&&e.target.closest("button,summary,label"))flash();},true);
 function go(t){document.body.classList.add("page");clearTimeout(pageT);pageT=setTimeout(function(){document.body.classList.remove("page");},700);tab=normTab(t);confirmId=null;addingEntryId=null;location.hash=tab;render();}
 function render(){
+  var fa=document.activeElement,fid=(fa&&fa.id&&fa.id.indexOf("f-")===0)?fa.id:null,fs=fid?fa.selectionStart:null,fe=fid?fa.selectionEnd:null;
   document.body.classList.toggle("compact",!!prefs.compact);applyTheme();
   if(!visibleTabs().some(function(t){return t[0]===tab;})&&tab!=="mehr") tab="lager";
   var nav=document.getElementById("tabs"),vt=visibleTabs(),navKey=vt.map(function(t){return t[0];}).join();
@@ -2516,6 +2528,7 @@ function render(){
   if(cloud.sid&&cloud.loading) app.appendChild(h("div",{class:"empty"},["Stammdaten werden geladen …"]));
   if(shared||sharedErr) app.appendChild(viewShared());
   app.appendChild(tab==="freizeit"?viewTrips():tab==="stamm"?viewStamm():tab==="mehr"?viewMehr():viewLager());
+  if(fid){var nn=document.getElementById(fid);if(nn&&nn!==document.activeElement){nn.focus();try{if(fs!=null)nn.setSelectionRange(fs,fe);}catch(e){}}}
 }
 initShare();
 initJoin();
